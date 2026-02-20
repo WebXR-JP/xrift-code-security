@@ -1,6 +1,6 @@
 {
   "name": "@xrift/code-security",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Code security analyzer powered by acorn",
   "main": "./dist/index.js",
