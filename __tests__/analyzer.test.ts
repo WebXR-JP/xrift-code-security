@@ -511,4 +511,46 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
       expect(result).toBe('critical')
     })
   })
+
+  describe('バンドル依存ファイルの技術的違反は完全抑制される', () => {
+    const bundledContext: FileContext = {
+      filePath: 'vision_bundle-DJzU6HDp.js',
+      isUserCode: false,
+      isSharedLibrary: false,
+      isBundledDependency: true,
+    }
+
+    it.each([
+      'no-obfuscation',
+      'no-dangerous-dom',
+      'no-navigator-access',
+      'no-prototype-pollution',
+      'no-global-override',
+      'no-network-without-permission',
+    ])('%s は完全抑制される', (rule) => {
+      const result = adjustViolationSeverity(rule, 'critical', bundledContext)
+      expect(result).toBeNull()
+    })
+
+    it.each([
+      'no-eval',
+      'no-storage-access',
+      'no-storage-event',
+    ])('%s は critical のまま残る', (rule) => {
+      const result = adjustViolationSeverity(rule, 'critical', bundledContext)
+      expect(result).toBe('critical')
+    })
+
+    it('ユーザーコードでは技術的違反も抑制されない', () => {
+      const userContext: FileContext = {
+        filePath: '__federation_expose_World-abc123.js',
+        isUserCode: true,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+
+      const result = adjustViolationSeverity('no-obfuscation', 'critical', userContext)
+      expect(result).toBe('critical')
+    })
+  })
 })

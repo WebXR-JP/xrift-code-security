@@ -76,7 +76,8 @@ export function adjustViolationSeverity(
     }
   }
 
-  // 共有ライブラリ、バンドル依存、remoteEntryは一部のルールを緩和
+  // 共有ライブラリ、バンドル依存、remoteEntryは技術的違反を完全抑制
+  // 開発者が修正できないバンドルコードの warning はノイズになるため
   if (context.isSharedLibrary || context.isBundledDependency || isRemoteEntry) {
     const technicalViolations = [
       'no-obfuscation',
@@ -88,7 +89,7 @@ export function adjustViolationSeverity(
     ]
 
     if (technicalViolations.includes(rule)) {
-      return 'warning'
+      return null
     }
 
     const criticalViolations = [
@@ -113,14 +114,14 @@ export function describeFileContext(context: FileContext): string {
     return 'ユーザーコード（最も厳格に検証）'
   }
   if (context.isSharedLibrary) {
-    return '共有ライブラリ（Module Federation自動生成、一部ルールを緩和）'
+    return '共有ライブラリ（Module Federation自動生成、技術的違反を抑制）'
   }
   if (context.isBundledDependency) {
-    return 'バンドルされた依存ライブラリ（技術的違反を緩和）'
+    return 'バンドルされた依存ライブラリ（技術的違反を抑制）'
   }
   const fileName = context.filePath
   if (fileName === 'remoteEntry.js') {
-    return 'Module Federationエントリーポイント（Module Federation自動生成、一部ルールを緩和）'
+    return 'Module Federationエントリーポイント（Module Federation自動生成、技術的違反を抑制）'
   }
   if (fileName.includes('__federation_fn_import')) {
     return 'Module Federation動的インポート（厳格に検証）'
