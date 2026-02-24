@@ -58,21 +58,62 @@ const result = service.validate({
 
 ## 検出ルール
 
-| ルール | 説明 | 重大度 |
-|--------|------|--------|
-| `no-eval` | `eval()` の使用 | critical |
-| `no-string-timeout` | `setTimeout/setInterval` への文字列引数 | critical |
-| `no-storage-access` | `localStorage/sessionStorage` アクセス | critical |
-| `no-cookie-access` | `document.cookie` アクセス | critical |
-| `no-indexeddb-access` | `indexedDB` アクセス | critical |
-| `no-storage-event` | `addEventListener('storage')` / `onstorage` | critical |
-| `no-navigator-access` | `navigator.*` アクセス | critical |
-| `no-dangerous-dom` | `innerHTML` 代入 / `createElement('script')` | critical |
-| `no-global-override` | `window/document/navigator` の改ざん | critical |
-| `no-prototype-pollution` | `Object.prototype` 汚染 | critical |
-| `no-obfuscation` | `atob/btoa/String.fromCharCode` 等 | critical |
-| `no-external-import` | 外部 URL からの `import` | critical |
-| `no-network-without-permission` | 未許可ドメインへの通信 | critical |
+すべてのルールはデフォルト `critical` ですが、ファイルコンテキスト（バンドル依存、共有ライブラリ等）に応じて `warning` への緩和や完全抑制が行われます。
+
+### コード実行
+
+| ルール | 検出対象 |
+|--------|----------|
+| `no-eval` | `eval()` の呼び出し |
+| `no-string-timeout` | `setTimeout("code", ms)` / `setInterval("code", ms)` のように文字列を渡すパターン |
+
+### ストレージ・Cookie
+
+| ルール | 検出対象 |
+|--------|----------|
+| `no-storage-access` | `localStorage.*` / `sessionStorage.*` へのアクセス |
+| `no-cookie-access` | `document.cookie` へのアクセス |
+| `no-indexeddb-access` | `indexedDB.*` へのアクセス |
+| `no-storage-event` | `addEventListener('storage', ...)` / `onstorage = ...` |
+
+### ブラウザ API
+
+| ルール | 検出対象 |
+|--------|----------|
+| `no-navigator-access` | `navigator.*` プロパティへのアクセス（フィンガープリンティング防止） |
+| `no-dangerous-dom` | `innerHTML` / `outerHTML` への代入、`document.createElement('script'` / `'iframe')` 、`insertAdjacentHTML()`、`document.head` へのアクセス |
+| `no-global-override` | `window.*` / `globalThis.*` / `document.*` / `navigator.*` への代入によるグローバル改ざん |
+| `no-prototype-pollution` | `Object.prototype` / `Array.prototype` 等の組み込みオブジェクトのプロトタイプ汚染（自クラスの `.prototype` 定義は対象外） |
+
+### ネットワーク・インポート
+
+| ルール | 検出対象 |
+|--------|----------|
+| `no-network-without-permission` | `fetch()` / `XMLHttpRequest` / `WebSocket` / `navigator.sendBeacon()` による未許可ドメインへの通信（`.wasm` ファイルの読み込みは対象外） |
+| `no-external-import` | `import ... from 'https://...'` のような外部 URL からの import |
+
+### 難読化
+
+| ルール | 検出対象 |
+|--------|----------|
+| `no-obfuscation` | `atob()` / `btoa()` / `unescape()` / `decodeURIComponent()` / `String.fromCharCode()` の使用、16進数・Unicode エスケープ、高エントロピー文字列（閾値: 7.0）、疑わしい変数名パターン |
+
+### ファイルコンテキストによる調整
+
+ファイルの種類に応じて、違反の重大度が自動調整されます。
+
+| ファイル種別 | 判定基準 | 調整内容 |
+|-------------|----------|----------|
+| ユーザーコード | `__federation_expose_World-*.js` | 調整なし（すべて厳格） |
+| MF 動的インポート | `__federation_fn_import` を含む | 調整なし（すべて厳格） |
+| 共有ライブラリ | `__federation_shared_*` | 技術的違反を `warning` に緩和 |
+| バンドル依存 | 上記以外の `.js` | 技術的違反を `warning` に緩和 |
+| `remoteEntry.js` | ファイル名が一致 | `no-global-override` / `no-dangerous-dom` を完全抑制、他の技術的違反は `warning` |
+| Vite preload-helper | `preload-helper*` で始まる | `no-dangerous-dom` を完全抑制 |
+
+> **技術的違反**: `no-obfuscation`, `no-dangerous-dom`, `no-navigator-access`, `no-prototype-pollution`, `no-global-override`, `no-network-without-permission`
+>
+> **常に critical**: `no-eval`, `no-storage-access`, `no-storage-event`（ファイル種別にかかわらず緩和されない）
 
 ## API リファレンス
 
