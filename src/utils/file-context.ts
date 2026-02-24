@@ -38,12 +38,13 @@ export function determineFileContext(filePath: string): FileContext {
 
 /**
  * ファイルコンテキストに基づいて違反の重大度を調整
+ * null を返した場合、その違反は完全に抑制される（誤検知として除外）
  */
 export function adjustViolationSeverity(
   rule: string,
   originalSeverity: 'critical' | 'warning',
   context: FileContext
-): 'critical' | 'warning' {
+): 'critical' | 'warning' | null {
   // ユーザーコードは常に厳格
   if (context.isUserCode) {
     return originalSeverity
@@ -55,8 +56,27 @@ export function adjustViolationSeverity(
     return originalSeverity
   }
 
-  // 共有ライブラリ、バンドル依存、remoteEntryは一部のルールを緩和
+  // remoteEntry.js: Module Federationの仕様上必須の動作は完全抑制
   const isRemoteEntry = fileName === 'remoteEntry.js'
+  if (isRemoteEntry) {
+    const suppressedForRemoteEntry = [
+      'no-global-override',
+      'no-dangerous-dom',
+    ]
+    if (suppressedForRemoteEntry.includes(rule)) {
+      return null
+    }
+  }
+
+  // Vite preload-helper: document.head へのプリロード追加は標準動作のため完全抑制
+  const isPreloadHelper = fileName.startsWith('preload-helper')
+  if (isPreloadHelper) {
+    if (rule === 'no-dangerous-dom') {
+      return null
+    }
+  }
+
+  // 共有ライブラリ、バンドル依存、remoteEntryは一部のルールを緩和
   if (context.isSharedLibrary || context.isBundledDependency || isRemoteEntry) {
     const technicalViolations = [
       'no-obfuscation',

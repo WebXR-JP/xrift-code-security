@@ -20,6 +20,32 @@ import {
 const ENTROPY_THRESHOLD = 7.0
 
 /**
+ * プロトタイプ汚染として検出すべき組み込みオブジェクト
+ * MyClass.prototype.method = ... のようなクラス定義パターンは対象外
+ */
+const BUILTIN_PROTOTYPES = [
+  'Object', 'Array', 'String', 'Number', 'Boolean',
+  'Function', 'RegExp', 'Date', 'Promise',
+  'Map', 'Set', 'WeakMap', 'WeakSet', 'Error',
+]
+
+/**
+ * 疑わしい変数名チェックから除外する既知の安全な変数名
+ * React DevTools、webpack、Vite 等のビルドツールが使用する標準的なグローバル変数
+ */
+const KNOWN_SAFE_VARIABLES = [
+  '__REACT_DEVTOOLS_GLOBAL_HOOK__',
+  '__webpack_require__',
+  '__webpack_modules__',
+  '__webpack_exports__',
+  '__webpack_module_cache__',
+  '__vite_ssr_import__',
+  '__vite_ssr_dynamic_import__',
+  '__vite_ssr_exportAll__',
+  '__vite_ssr_export__',
+]
+
+/**
  * Violationオブジェクトを作成するヘルパー関数
  */
 function createViolation(
@@ -104,13 +130,17 @@ export function analyzeCodeSecurity(
 
       // ネットワークAPI検出
       if (['fetch', 'XMLHttpRequest'].includes(calleeName || '')) {
-        signals.hasNetworkAPI = true
-
         // 引数からURL抽出
         const urlArg = node.arguments[0]
         if (urlArg?.type === 'Literal' && typeof urlArg.value === 'string') {
-          urlStrings.push(urlArg.value)
+          const urlValue = urlArg.value as string
+          // .wasm ファイルの読み込みはWASMライブラリの標準的な初期化処理のため除外
+          if (!urlValue.endsWith('.wasm')) {
+            signals.hasNetworkAPI = true
+            urlStrings.push(urlValue)
+          }
         } else {
+          signals.hasNetworkAPI = true
           // 動的URL構築の疑い
           signals.hasDynamicURLConstruction = true
         }
@@ -249,18 +279,20 @@ export function analyzeCodeSecurity(
         ))
       }
 
-      // Object.prototype.xxx = ... 検出
+      // Object.prototype.xxx = ... 検出（組み込みオブジェクトのみ）
       if (
         left.type === 'MemberExpression' &&
         left.object.type === 'MemberExpression' &&
         left.object.property.type === 'Identifier' &&
-        left.object.property.name === 'prototype'
+        left.object.property.name === 'prototype' &&
+        left.object.object.type === 'Identifier' &&
+        BUILTIN_PROTOTYPES.includes(left.object.object.name)
       ) {
         signals.hasGlobalVariableOverride = true
         signals.detectedViolations.push(createViolation(
           'no-prototype-pollution',
           'critical',
-          'プロトタイプ汚染は禁止されています',
+          `${left.object.object.name}.prototypeの汚染は禁止されています`,
           node
         ))
       }
@@ -430,8 +462,11 @@ export function analyzeCodeSecurity(
   }
 
   // 疑わしい変数名チェック（Critical）
+  // 既知の安全な変数名（React DevTools, webpack, Vite等）は除外
   const suspiciousVars = variableNames.filter(
-    name => /^[_$][a-zA-Z0-9_$]{4,}$/.test(name) && calculateEntropy(name) > 3.5
+    name => /^[_$][a-zA-Z0-9_$]{4,}$/.test(name) &&
+            calculateEntropy(name) > 3.5 &&
+            !KNOWN_SAFE_VARIABLES.includes(name)
   )
   if (suspiciousVars.length > 0) {
     signals.hasObfuscatedCode = true
