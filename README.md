@@ -106,9 +106,9 @@ const result = service.validate({
 |-------------|----------|----------|
 | ユーザーコード | `__federation_expose_World-*.js` | 調整なし（すべて厳格） |
 | MF 動的インポート | `__federation_fn_import` を含む | 調整なし（すべて厳格） |
-| 共有ライブラリ | `__federation_shared_*` | 技術的違反を `warning` に緩和 |
-| バンドル依存 | 上記以外の `.js` | 技術的違反を `warning` に緩和 |
-| `remoteEntry.js` | ファイル名が一致 | `no-global-override` / `no-dangerous-dom` を完全抑制、他の技術的違反は `warning` |
+| 共有ライブラリ | `__federation_shared_*` | 技術的違反を完全抑制 |
+| バンドル依存 | 上記以外の `.js` | 技術的違反を完全抑制 |
+| `remoteEntry.js` | ファイル名が一致 | 技術的違反を完全抑制 |
 | Vite preload-helper | `preload-helper*` で始まる | `no-dangerous-dom` を完全抑制 |
 
 > **技術的違反**: `no-obfuscation`, `no-dangerous-dom`, `no-navigator-access`, `no-prototype-pollution`, `no-global-override`, `no-network-without-permission`
