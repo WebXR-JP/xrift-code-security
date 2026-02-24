@@ -30,18 +30,25 @@ export class CodeSecurityService {
     )
 
     // ファイルコンテキストに基づいて違反の重大度を調整
-    const adjustedViolations = signals.detectedViolations.map(violation => {
-      const adjustedSeverity = adjustViolationSeverity(
-        violation.rule,
-        violation.severity,
-        fileContext
-      )
+    // adjustViolationSeverity が null を返した場合は誤検知として除外
+    const adjustedViolations = signals.detectedViolations
+      .map(violation => {
+        const adjustedSeverity = adjustViolationSeverity(
+          violation.rule,
+          violation.severity,
+          fileContext
+        )
 
-      return {
-        ...violation,
-        severity: adjustedSeverity
-      }
-    })
+        if (adjustedSeverity === null) {
+          return null
+        }
+
+        return {
+          ...violation,
+          severity: adjustedSeverity
+        }
+      })
+      .filter((v): v is NonNullable<typeof v> => v !== null)
 
     // セキュリティスコア計算
     const securityScore = calculateSecurityScore(signals)

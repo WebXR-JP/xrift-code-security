@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
+import { adjustViolationSeverity } from '../src/utils/file-context.js'
+import type { FileContext } from '../src/types.js'
 
 describe('CodeSecurityService - analyzer', () => {
   describe('正常系', () => {
@@ -332,6 +334,181 @@ describe('CodeSecurityService - analyzer', () => {
           }),
         ])
       )
+    })
+  })
+
+  // --- 誤検知改善テスト (Issue #9, #10, #11, #12, #13) ---
+
+  describe('Issue #9 - 自クラスの .prototype 定義は誤検知しない', () => {
+    it('MyClass.prototype.method = ... は検出しない', () => {
+      const code = `
+        function MyClass() {}
+        MyClass.prototype.render = function() { return null }
+        MyClass.prototype.update = function(dt) { this.time += dt }
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(false)
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-prototype-pollution')).toHaveLength(0)
+    })
+
+    it('Object.prototype の汚染は引き続き検出する', () => {
+      const code = `
+        Object.prototype.isAdmin = true
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-prototype-pollution',
+            severity: 'critical',
+          }),
+        ])
+      )
+    })
+
+    it('Array.prototype の汚染も検出する', () => {
+      const code = `
+        Array.prototype.last = function() { return this[this.length - 1] }
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-prototype-pollution',
+            severity: 'critical',
+          }),
+        ])
+      )
+    })
+  })
+
+  describe('Issue #10 - __REACT_DEVTOOLS_GLOBAL_HOOK__ は誤検知しない', () => {
+    it('React DevTools のグローバル変数は疑わしい変数名として検出しない', () => {
+      const code = `
+        const hook = typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ !== 'undefined'
+          ? __REACT_DEVTOOLS_GLOBAL_HOOK__
+          : null
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      const obfuscationViolations = signals.detectedViolations.filter(v => v.rule === 'no-obfuscation')
+      const hasSuspiciousVarViolation = obfuscationViolations.some(v =>
+        v.message.includes('疑わしい変数名')
+      )
+      expect(hasSuspiciousVarViolation).toBe(false)
+    })
+
+    it('webpack のグローバル変数も疑わしい変数名として検出しない', () => {
+      const code = `
+        const mod = __webpack_require__(123)
+        __webpack_exports__["default"] = mod
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      const hasSuspiciousVarViolation = signals.detectedViolations.some(v =>
+        v.rule === 'no-obfuscation' && v.message.includes('疑わしい変数名')
+      )
+      expect(hasSuspiciousVarViolation).toBe(false)
+    })
+  })
+
+  describe('Issue #13 - WASM ファイルの fetch は誤検知しない', () => {
+    it('.wasm ファイルの fetch はネットワーク違反として検出しない', () => {
+      const code = `
+        const response = fetch('rapier_wasm_bg.wasm')
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNetworkAPI).toBe(false)
+      expect(signals.hasNetworkWithoutPermission).toBe(false)
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-network-without-permission')).toHaveLength(0)
+    })
+
+    it('通常の fetch は引き続き検出する', () => {
+      const code = `
+        fetch('https://evil.com/data')
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNetworkAPI).toBe(true)
+    })
+  })
+})
+
+describe('adjustViolationSeverity - ファイルコンテキスト別の抑制', () => {
+  describe('Issue #11 - Vite preload-helper の document.head 誤検知', () => {
+    it('preload-helper ファイルの no-dangerous-dom は完全抑制される', () => {
+      const context: FileContext = {
+        filePath: 'preload-helper-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: true,
+      }
+
+      const result = adjustViolationSeverity('no-dangerous-dom', 'critical', context)
+      expect(result).toBeNull()
+    })
+
+    it('preload-helper でも no-eval は抑制されない', () => {
+      const context: FileContext = {
+        filePath: 'preload-helper-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: true,
+      }
+
+      const result = adjustViolationSeverity('no-eval', 'critical', context)
+      expect(result).toBe('critical')
+    })
+  })
+
+  describe('Issue #12 - remoteEntry.js の window/globalThis 警告', () => {
+    it('remoteEntry.js の no-global-override は完全抑制される', () => {
+      const context: FileContext = {
+        filePath: 'remoteEntry.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+
+      const result = adjustViolationSeverity('no-global-override', 'critical', context)
+      expect(result).toBeNull()
+    })
+
+    it('remoteEntry.js の no-dangerous-dom は完全抑制される', () => {
+      const context: FileContext = {
+        filePath: 'remoteEntry.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+
+      const result = adjustViolationSeverity('no-dangerous-dom', 'critical', context)
+      expect(result).toBeNull()
+    })
+
+    it('remoteEntry.js でも no-eval は抑制されない', () => {
+      const context: FileContext = {
+        filePath: 'remoteEntry.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+
+      const result = adjustViolationSeverity('no-eval', 'critical', context)
+      expect(result).toBe('critical')
     })
   })
 })
