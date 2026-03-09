@@ -548,12 +548,53 @@ export function analyzeCodeSecurity(
       if (node.callee.type === 'Identifier' && node.callee.name === 'Function') {
         signals.hasEval = true
         signals.hasDynamicCodeExecution = true
-        signals.detectedViolations.push(createViolation(
-          'no-new-function',
-          'critical',
-          'new Function()の使用は禁止されています（eval相当の動的コード実行）',
-          node
-        ))
+
+        // 引数の文字列にセンシティブ API 名や URL が含まれているか検査
+        const argStrings = node.arguments
+          .filter((a: any) => a.type === 'Literal' && typeof a.value === 'string')
+          .map((a: any) => a.value as string)
+        const bodyText = argStrings.join(' ')
+
+        const referencesSensitiveAPI = SENSITIVE_APIS.some(api => bodyText.includes(api))
+        const urlMatches = bodyText.match(/https?:\/\/[^\s'"`)]+/g) || []
+
+        if (referencesSensitiveAPI) {
+          const matched = SENSITIVE_APIS.filter(api => bodyText.includes(api))
+          signals.detectedViolations.push(createViolation(
+            'no-sensitive-api-override',
+            'critical',
+            `new Function() 内でセンシティブ API (${matched.join(', ')}) が参照されています`,
+            node
+          ))
+        }
+
+        if (urlMatches.length > 0) {
+          const domains = extractDomains(urlMatches)
+          const allowedDomains = permissions?.network?.allowedDomains || []
+          const unauthorized = domains.filter(
+            d => !allowedDomains.includes(d) && !ALLOWED_DOMAINS.includes(d)
+          )
+          if (unauthorized.length > 0) {
+            signals.hasNetworkAPI = true
+            signals.hasNetworkWithoutPermission = true
+            signals.detectedViolations.push(createViolation(
+              'no-unauthorized-domain',
+              'critical',
+              `new Function() 内で許可されていないドメインが参照されています: ${unauthorized.join(', ')}`,
+              node
+            ))
+          }
+        }
+
+        // センシティブ API も URL も含まない場合は通常の no-new-function
+        if (!referencesSensitiveAPI && urlMatches.length === 0) {
+          signals.detectedViolations.push(createViolation(
+            'no-new-function',
+            'critical',
+            'new Function()の使用は禁止されています（eval相当の動的コード実行）',
+            node
+          ))
+        }
       }
     },
 
