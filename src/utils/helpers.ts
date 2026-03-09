@@ -105,27 +105,40 @@ export const ALLOWED_DOMAINS = [
  * バンドル依存として認識する既知ライブラリのファイル名パターン
  * ここに一致しないファイルは未知のファイルとして扱い、技術的違反の抑制対象外とする
  */
+/**
+ * Viteのバンドルハッシュサフィックス: -{hash}.js
+ * 例: rapier-BEkZi1Ii.js, hls-BIqz-PrE.js
+ */
+const VITE_HASH_SUFFIX = '-[a-zA-Z0-9_-]{8}\\.js$'
+
+/**
+ * 既知の非ハッシュサフィックス（.min.js, .module.js 等）
+ */
+const KNOWN_SUFFIXES = '(?:\\.min|\\.module|_wasm|_bg|_decoder|_transcoder|_workers|_backend|_tasks|_bundle|_module|-es|-worker|-webgl)(?:-[a-zA-Z0-9_-]{8})?\\.js$'
+
 export const KNOWN_LIBRARY_PATTERNS: RegExp[] = [
   // Three.js ecosystem
-  /^three[-.].*\.js$/,
-  /^draco[-_].*\.js$/,
-  /^basis[-_].*\.js$/,
+  new RegExp(`^three(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^draco(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^basis(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
   // Physics engines
-  /^rapier[-_].*\.js$/,
-  /^cannon[-_].*\.js$/,
-  /^ammo[-_].*\.js$/,
+  new RegExp(`^rapier(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^cannon(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^ammo(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
   // Media processing
-  /^hls[-.].*\.js$/,
-  /^mediapipe[-_].*\.js$/,
-  /^vision[-_]bundle[-_].*\.js$/,
-  /^tfjs[-_].*\.js$/,
+  new RegExp(`^hls(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^mediapipe(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^vision_bundle(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^tfjs(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
   // Google 3D Tiles (3d-tiles-renderer)
-  /^GoogleTiles.*\.js$/,
+  new RegExp(`^GoogleTilesInner${VITE_HASH_SUFFIX}`),
   // Other 3D/WebXR libraries
-  /^cesium[-_].*\.js$/,
-  /^potpack[-_].*\.js$/,
+  new RegExp(`^cesium(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
+  new RegExp(`^potpack(?:${KNOWN_SUFFIXES}|${VITE_HASH_SUFFIX})`),
   // Vite internal
-  /^__vite[-_].*\.js$/,
+  /^__vite-browser-external(?:-[a-zA-Z0-9_-]+)?\.js$/,
+  // Vite helpers
+  /^_commonjsHelpers-[a-zA-Z0-9_-]+\.js$/,
 ]
 
 /**

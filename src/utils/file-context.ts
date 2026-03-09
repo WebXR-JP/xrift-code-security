@@ -82,11 +82,13 @@ export function adjustViolationSeverity(
   // 開発者が修正できないバンドルコードの warning はノイズになるため
   if (context.isSharedLibrary || context.isBundledDependency || isRemoteEntry) {
     // 低リスク技術的違反: バンドルコードで頻出し、直接的な攻撃リスクが低いため完全抑制
+    // no-network-without-permission: 信頼済みライブラリの動的URL fetch は静的解析でドメイン特定不可のため抑制
     const lowRiskViolations = [
       'no-obfuscation',
       'no-navigator-access',
       'no-prototype-pollution',
       'no-global-override',
+      'no-network-without-permission',
     ]
 
     if (lowRiskViolations.includes(rule)) {
@@ -95,7 +97,6 @@ export function adjustViolationSeverity(
 
     // 高リスク技術的違反: 攻撃に直結しうるため、バンドル依存でも抑制しない
     const highRiskViolations = [
-      'no-network-without-permission',
       'no-dangerous-dom',
     ]
 

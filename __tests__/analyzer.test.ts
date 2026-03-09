@@ -527,13 +527,13 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
       'no-navigator-access',
       'no-prototype-pollution',
       'no-global-override',
+      'no-network-without-permission',
     ])('低リスク違反 %s は完全抑制される', (rule) => {
       const result = adjustViolationSeverity(rule, 'critical', bundledContext)
       expect(result).toBeNull()
     })
 
     it.each([
-      'no-network-without-permission',
       'no-dangerous-dom',
     ])('高リスク違反 %s は抑制されない', (rule) => {
       const result = adjustViolationSeverity(rule, 'critical', bundledContext)
@@ -564,8 +564,26 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
 
   describe('ホワイトリスト方式 - 既知ライブラリパターン', () => {
     it.each([
-      'three-webgl.js',
+      // Viteハッシュ形式（ハッシュは8文字）
+      'three-Ca30qACE.js',
+      'draco-Ab1c2D3e.js',
+      'basis-XyZ78901.js',
+      'rapier-BEkZi1Ii.js',
+      'cannon-Fg2h3J4k.js',
+      'ammo-Lm5n6P7q.js',
+      'hls-BIqz-PrE.js',
+      'mediapipe-Rs8t9U0v.js',
+      'vision_bundle-DJzU6HDp.js',
+      'tfjs-Wx1y2Z3a.js',
+      'GoogleTilesInner-7LW4SlWm.js',
+      'cesium-Bc4d5E6f.js',
+      'potpack-Gh7i8J9k.js',
+      '__vite-browser-external.js',
+      '_commonjsHelpers-BqLXS_qQ.js',
+      // 既知サフィックス形式
       'three.module.js',
+      'three-webgl.js',
+      'three.min.js',
       'draco_decoder.js',
       'basis_transcoder.js',
       'rapier_wasm.js',
@@ -573,12 +591,12 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
       'ammo-worker.js',
       'hls.min.js',
       'mediapipe_tasks.js',
-      'vision_bundle-DJzU6HDp.js',
       'tfjs_backend.js',
-      'GoogleTilesInner-7LW4SlWm.js',
       'cesium_workers.js',
       'potpack_module.js',
-      '__vite-browser-external.js',
+      // 既知サフィックス + ハッシュ（8文字）
+      'draco_decoder-Ab1c2D3e.js',
+      'rapier_wasm-BEkZi1Ii.js',
     ])('既知ライブラリ %s は matchesKnownLibraryPattern に一致する', (fileName) => {
       expect(matchesKnownLibraryPattern(fileName)).toBe(true)
     })
@@ -589,7 +607,15 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
       'keylogger.js',
       'custom-script.js',
       'app.js',
-    ])('未知ファイル %s は matchesKnownLibraryPattern に一致しない', (fileName) => {
+      // 偽装パターン: ライブラリ名 + 任意の文字列
+      'three-malware.js',
+      'rapier_steal.js',
+      'hls-exfiltrate-data.js',
+      'cesium_keylogger.js',
+      'GoogleTilesHoge.js',
+      'GoogleTilesInner.js',
+      '__vite-malware.js',
+    ])('未知/偽装ファイル %s は matchesKnownLibraryPattern に一致しない', (fileName) => {
       expect(matchesKnownLibraryPattern(fileName)).toBe(false)
     })
   })
