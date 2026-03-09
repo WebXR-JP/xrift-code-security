@@ -265,6 +265,44 @@ export function analyzeCodeSecurity(
           ))
         }
       }
+
+      // Object.defineProperty(window, 'fetch', ...) / Reflect.set(window, 'fetch', ...) 検出
+      if (node.callee.type === 'MemberExpression') {
+        const obj = node.callee.object
+        const prop = node.callee.property
+        if (
+          obj?.type === 'Identifier' &&
+          prop?.type === 'Identifier' &&
+          ((obj.name === 'Object' && prop.name === 'defineProperty') ||
+           (obj.name === 'Reflect' && prop.name === 'set'))
+        ) {
+          const targetArg = node.arguments[0]
+          const nameArg = node.arguments[1]
+          if (
+            targetArg?.type === 'Identifier' &&
+            ['window', 'globalThis'].includes(targetArg.name) &&
+            nameArg?.type === 'Literal' &&
+            typeof nameArg.value === 'string'
+          ) {
+            signals.hasGlobalVariableOverride = true
+            if (SENSITIVE_APIS.includes(nameArg.value)) {
+              signals.detectedViolations.push(createViolation(
+                'no-sensitive-api-override',
+                'critical',
+                `Object.defineProperty/Reflect.set による ${targetArg.name}.${nameArg.value} の改ざんは禁止されています`,
+                node
+              ))
+            } else {
+              signals.detectedViolations.push(createViolation(
+                'no-global-override',
+                'critical',
+                `Object.defineProperty/Reflect.set による ${targetArg.name} の改ざんは禁止されています`,
+                node
+              ))
+            }
+          }
+        }
+      }
     },
 
     // 2. グローバル変数改ざん
@@ -279,7 +317,9 @@ export function analyzeCodeSecurity(
       ) {
         const propertyName = left.property.type === 'Identifier'
           ? left.property.name
-          : null
+          : (left.property.type === 'Literal' && typeof left.property.value === 'string')
+            ? left.property.value
+            : null
 
         signals.hasGlobalVariableOverride = true
 
@@ -337,6 +377,35 @@ export function analyzeCodeSecurity(
           'onstorageへの代入は禁止されています（トークン傍受のリスク）',
           node
         ))
+      }
+
+      // .src / .href への URL 代入検出（Image/CSS によるデータ送信）
+      if (
+        left.type === 'MemberExpression' &&
+        left.property.type === 'Identifier' &&
+        ['src', 'href'].includes(left.property.name)
+      ) {
+        const rightValue = node.right
+        if (rightValue?.type === 'Literal' && typeof rightValue.value === 'string') {
+          const url = rightValue.value
+          if (url.startsWith('http://') || url.startsWith('https://')) {
+            const domains = extractDomains([url])
+            const allowedDomains = permissions?.network?.allowedDomains || []
+            const unauthorized = domains.filter(
+              d => !allowedDomains.includes(d) && !ALLOWED_DOMAINS.includes(d)
+            )
+            if (unauthorized.length > 0) {
+              signals.hasNetworkAPI = true
+              signals.hasNetworkWithoutPermission = true
+              signals.detectedViolations.push(createViolation(
+                'no-unauthorized-domain',
+                'critical',
+                `.src/.href による許可されていないドメインへのデータ送信: ${unauthorized.join(', ')}`,
+                node
+              ))
+            }
+          }
+        }
       }
     },
 
@@ -471,6 +540,45 @@ export function analyzeCodeSecurity(
           '16進数/Unicodeエスケープによる難読化は禁止されています',
           node
         ))
+      }
+    },
+
+    // 7. new Function() コンストラクタ検出
+    NewExpression(node: any, _ancestors: acorn.Node[]) {
+      if (node.callee.type === 'Identifier' && node.callee.name === 'Function') {
+        signals.hasEval = true
+        signals.hasDynamicCodeExecution = true
+        signals.detectedViolations.push(createViolation(
+          'no-new-function',
+          'critical',
+          'new Function()の使用は禁止されています（eval相当の動的コード実行）',
+          node
+        ))
+      }
+    },
+
+    // 8. dynamic import 検出
+    ImportExpression(node: any, _ancestors: acorn.Node[]) {
+      const source = node.source
+      if (source?.type === 'Literal' && typeof source.value === 'string') {
+        const url = source.value
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+          signals.hasNetworkAPI = true
+          const domains = extractDomains([url])
+          const allowedDomains = permissions?.network?.allowedDomains || []
+          const unauthorized = domains.filter(
+            d => !allowedDomains.includes(d) && !ALLOWED_DOMAINS.includes(d)
+          )
+          if (unauthorized.length > 0) {
+            signals.hasNetworkWithoutPermission = true
+            signals.detectedViolations.push(createViolation(
+              'no-unauthorized-domain',
+              'critical',
+              `動的importによる許可されていないドメインからのコード読み込み: ${unauthorized.join(', ')}`,
+              node
+            ))
+          }
+        }
       }
     },
   })
