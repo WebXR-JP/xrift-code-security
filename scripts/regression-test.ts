@@ -1,17 +1,21 @@
 /**
  * 回帰テストスクリプト
  * 実プロジェクトの dist ディレクトリを解析し、新ルールが正規ライブラリに誤検知しないことを確認する
+ *
+ * 使い方:
+ *   npx tsx scripts/regression-test.ts <dist-dir> [<dist-dir> ...]
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, basename } from 'node:path'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
 import { adjustViolationSeverity, determineFileContext } from '../src/utils/file-context.js'
 
-const PROJECTS = [
-  { name: 'plateau-test', path: '../../plateau-test/dist' },
-  { name: 'xrift-world-template', path: '../../xrift-world-template/dist' },
-  { name: 'xrcc', path: '../../xrcc/dist' },
-]
+const distDirs = process.argv.slice(2)
+
+if (distDirs.length === 0) {
+  console.error('使い方: npx tsx scripts/regression-test.ts <dist-dir> [<dist-dir> ...]')
+  process.exit(1)
+}
 
 function collectJsFiles(dir: string): string[] {
   const files: string[] = []
@@ -33,16 +37,16 @@ function collectJsFiles(dir: string): string[] {
 
 let allPassed = true
 
-for (const project of PROJECTS) {
-  const distPath = resolve(import.meta.dirname!, project.path)
+for (const distPath of distDirs) {
+  const projectName = basename(join(distPath, '..'))
   const jsFiles = collectJsFiles(distPath)
 
   if (jsFiles.length === 0) {
-    console.log(`\n⚠️  ${project.name}: dist ディレクトリが見つからないかJSファイルがありません (${distPath})`)
+    console.log(`\n⚠️  ${projectName}: dist ディレクトリが見つからないかJSファイルがありません (${distPath})`)
     continue
   }
 
-  console.log(`\n📦 ${project.name}: ${jsFiles.length} 個のJSファイルを解析中...`)
+  console.log(`\n📦 ${projectName}: ${jsFiles.length} 個のJSファイルを解析中...`)
 
   let filesFailed = 0
 
@@ -59,7 +63,6 @@ for (const project of PROJECTS) {
     })
 
     if (remainingViolations.length > 0) {
-      // 審査不合格のファイル
       filesFailed++
       console.log(`  ❌ ${fileName}:`)
       for (const v of remainingViolations) {
