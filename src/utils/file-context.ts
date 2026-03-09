@@ -118,6 +118,20 @@ export function adjustViolationSeverity(
 }
 
 /**
+ * どのカテゴリにも属さない未知のファイルかどうかを判定
+ * MF インフラ（remoteEntry, fn_import）や preload-helper は除外
+ */
+export function isUnknownFile(context: FileContext): boolean {
+  const fileName = context.filePath
+  return !context.isUserCode &&
+    !context.isSharedLibrary &&
+    !context.isBundledDependency &&
+    fileName !== 'remoteEntry.js' &&
+    !fileName.includes('__federation_fn_import') &&
+    !fileName.startsWith('preload-helper')
+}
+
+/**
  * ファイルコンテキストの説明を生成（デバッグ用）
  */
 export function describeFileContext(context: FileContext): string {

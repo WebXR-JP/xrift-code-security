@@ -1,6 +1,6 @@
 import { analyzeCodeSecurity } from './analyzer.js'
 import { calculateSecurityScore } from './scoring.js'
-import { adjustViolationSeverity, determineFileContext } from './utils/file-context.js'
+import { adjustViolationSeverity, determineFileContext, isUnknownFile } from './utils/file-context.js'
 import type {
   ValidateCodeRequest,
   ValidateCodeResponse,
@@ -87,6 +87,14 @@ export class CodeSecurityService {
       pkg => pkg.startsWith('http://') || pkg.startsWith('https://')
     )
 
+    // 未知ファイルのガイダンス生成
+    const notes: string[] = []
+    if (isUnknownFile(fileContext) && adjustedViolations.length > 0) {
+      notes.push(
+        `${fileContext.filePath} は既知のライブラリパターンに一致しません。正規のサードパーティライブラリである場合は、Issue で報告してください: https://github.com/WebXR-JP/xrift-code-security/issues`
+      )
+    }
+
     // Critical違反の有無のみで判定
     const valid = critical.length === 0
 
@@ -102,12 +110,13 @@ export class CodeSecurityService {
         suspiciousPatterns,
         detectedAPIs,
         externalDependencies
-      }
+      },
+      ...(notes.length > 0 ? { notes } : {})
     }
   }
 }
 
 export { analyzeCodeSecurity } from './analyzer.js'
 export { calculateSecurityScore, getSecurityVerdict } from './scoring.js'
-export { determineFileContext, adjustViolationSeverity } from './utils/file-context.js'
+export { determineFileContext, adjustViolationSeverity, isUnknownFile } from './utils/file-context.js'
 export * from './types.js'

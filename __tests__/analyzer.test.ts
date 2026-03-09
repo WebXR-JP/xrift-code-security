@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
-import { adjustViolationSeverity, determineFileContext } from '../src/utils/file-context.js'
+import { adjustViolationSeverity, determineFileContext, isUnknownFile } from '../src/utils/file-context.js'
 import { matchesKnownLibraryPattern } from '../src/utils/helpers.js'
+import { CodeSecurityService } from '../src/index.js'
 import type { FileContext } from '../src/types.js'
 
 describe('CodeSecurityService - analyzer', () => {
@@ -617,6 +618,78 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
     })
   })
 
+  describe('isUnknownFile - 未知ファイル判定', () => {
+    it('どのカテゴリにも属さないファイルは未知と判定される', () => {
+      const context: FileContext = {
+        filePath: 'GoogleTilesInner-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+      expect(isUnknownFile(context)).toBe(true)
+    })
+
+    it('ユーザーコードは未知と判定されない', () => {
+      const context: FileContext = {
+        filePath: '__federation_expose_World-abc123.js',
+        isUserCode: true,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+      expect(isUnknownFile(context)).toBe(false)
+    })
+
+    it('共有ライブラリは未知と判定されない', () => {
+      const context: FileContext = {
+        filePath: '__federation_shared_react.js',
+        isUserCode: false,
+        isSharedLibrary: true,
+        isBundledDependency: false,
+      }
+      expect(isUnknownFile(context)).toBe(false)
+    })
+
+    it('バンドル依存は未知と判定されない', () => {
+      const context: FileContext = {
+        filePath: 'three-webgl.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: true,
+      }
+      expect(isUnknownFile(context)).toBe(false)
+    })
+
+    it('remoteEntry.js は未知と判定されない', () => {
+      const context: FileContext = {
+        filePath: 'remoteEntry.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+      expect(isUnknownFile(context)).toBe(false)
+    })
+
+    it('__federation_fn_import は未知と判定されない', () => {
+      const context: FileContext = {
+        filePath: '__federation_fn_import-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+      expect(isUnknownFile(context)).toBe(false)
+    })
+
+    it('preload-helper は未知と判定されない', () => {
+      const context: FileContext = {
+        filePath: 'preload-helper-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      }
+      expect(isUnknownFile(context)).toBe(false)
+    })
+  })
+
   describe('攻撃シナリオ防止 - 未知ファイルの違反が抑制されない', () => {
     it('evil.js のような未知ファイルでは全違反が抑制されない', () => {
       const context = determineFileContext('evil.js')
@@ -659,5 +732,73 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
         expect(adjustViolationSeverity('no-eval', 'critical', context)).toBe('critical')
       }
     })
+  })
+})
+
+describe('CodeSecurityService - notes ガイダンス', () => {
+  const service = new CodeSecurityService()
+
+  it('未知ファイル + 違反ありの場合、notes にガイダンスが含まれる', () => {
+    const result = service.validate({
+      code: `eval("malicious")`,
+      packageJson: { dependencies: {} },
+      fileContext: {
+        filePath: 'GoogleTilesInner-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      },
+    })
+
+    expect(result.notes).toBeDefined()
+    expect(result.notes).toHaveLength(1)
+    expect(result.notes![0]).toContain('GoogleTilesInner-abc123.js')
+    expect(result.notes![0]).toContain('既知のライブラリパターンに一致しません')
+    expect(result.notes![0]).toContain('https://github.com/WebXR-JP/xrift-code-security/issues')
+  })
+
+  it('既知ライブラリの場合、notes は含まれない', () => {
+    const result = service.validate({
+      code: `eval("something")`,
+      packageJson: { dependencies: {} },
+      fileContext: {
+        filePath: 'three-webgl.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: true,
+      },
+    })
+
+    expect(result.notes).toBeUndefined()
+  })
+
+  it('ユーザーコードの場合、notes は含まれない', () => {
+    const result = service.validate({
+      code: `eval("something")`,
+      packageJson: { dependencies: {} },
+      fileContext: {
+        filePath: '__federation_expose_World-abc123.js',
+        isUserCode: true,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      },
+    })
+
+    expect(result.notes).toBeUndefined()
+  })
+
+  it('未知ファイル + 違反なしの場合、notes は含まれない', () => {
+    const result = service.validate({
+      code: `const x = 1 + 2`,
+      packageJson: { dependencies: {} },
+      fileContext: {
+        filePath: 'GoogleTilesInner-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: false,
+      },
+    })
+
+    expect(result.notes).toBeUndefined()
   })
 })

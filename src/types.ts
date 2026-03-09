@@ -83,4 +83,5 @@ export interface ValidateCodeResponse {
     detectedAPIs: string[]
     externalDependencies: string[]
   }
+  notes?: string[]
 }
