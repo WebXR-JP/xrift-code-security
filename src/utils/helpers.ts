@@ -119,6 +119,8 @@ export const KNOWN_LIBRARY_PATTERNS: RegExp[] = [
   /^mediapipe[-_].*\.js$/,
   /^vision[-_]bundle[-_].*\.js$/,
   /^tfjs[-_].*\.js$/,
+  // Google 3D Tiles (3d-tiles-renderer)
+  /^GoogleTiles.*\.js$/,
   // Other 3D/WebXR libraries
   /^cesium[-_].*\.js$/,
   /^potpack[-_].*\.js$/,
