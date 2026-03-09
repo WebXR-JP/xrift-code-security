@@ -95,6 +95,7 @@ export function adjustViolationSeverity(
       'no-prototype-pollution',
       'no-global-override',
       'no-network-without-permission',
+      'no-new-function',
     ]
 
     if (technicalViolations.includes(rule)) {
