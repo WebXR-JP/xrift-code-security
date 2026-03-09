@@ -100,3 +100,35 @@ export const ALLOWED_DOMAINS = [
   'unpkg.com',
   'esm.sh',
 ]
+
+/**
+ * バンドル依存として認識する既知ライブラリのファイル名パターン
+ * ここに一致しないファイルは未知のファイルとして扱い、技術的違反の抑制対象外とする
+ */
+export const KNOWN_LIBRARY_PATTERNS: RegExp[] = [
+  // Three.js ecosystem
+  /^three[-.].*\.js$/,
+  /^draco[-_].*\.js$/,
+  /^basis[-_].*\.js$/,
+  // Physics engines
+  /^rapier[-_].*\.js$/,
+  /^cannon[-_].*\.js$/,
+  /^ammo[-_].*\.js$/,
+  // Media processing
+  /^hls[-.].*\.js$/,
+  /^mediapipe[-_].*\.js$/,
+  /^vision[-_]bundle[-_].*\.js$/,
+  /^tfjs[-_].*\.js$/,
+  // Other 3D/WebXR libraries
+  /^cesium[-_].*\.js$/,
+  /^potpack[-_].*\.js$/,
+  // Vite internal
+  /^__vite[-_].*\.js$/,
+]
+
+/**
+ * ファイル名が既知ライブラリパターンに一致するかを判定
+ */
+export function matchesKnownLibraryPattern(fileName: string): boolean {
+  return KNOWN_LIBRARY_PATTERNS.some(pattern => pattern.test(fileName))
+}

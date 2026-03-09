@@ -1,4 +1,5 @@
 import type { FileContext } from '../types.js'
+import { matchesKnownLibraryPattern } from './helpers.js'
 
 /**
  * ファイルパスからコンテキストを判定
@@ -21,12 +22,13 @@ export function determineFileContext(filePath: string): FileContext {
     fileName.startsWith('__federation_shared_') ||
     filePath.includes('__federation_shared_')
 
-  // 3. バンドルされた依存ライブラリ（その他の*.js）
+  // 3. バンドルされた依存ライブラリ（既知パターンに一致する*.jsのみ）
   const isBundledDependency =
     !isUserCode &&
     !isSharedLibrary &&
     !fileName.includes('__federation_fn_import') &&
-    fileName !== 'remoteEntry.js'
+    fileName !== 'remoteEntry.js' &&
+    matchesKnownLibraryPattern(fileName)
 
   return {
     filePath: fileName,
@@ -76,20 +78,29 @@ export function adjustViolationSeverity(
     }
   }
 
-  // 共有ライブラリ、バンドル依存、remoteEntryは技術的違反を完全抑制
+  // 共有ライブラリ、バンドル依存、remoteEntryは技術的違反を段階的に抑制
   // 開発者が修正できないバンドルコードの warning はノイズになるため
   if (context.isSharedLibrary || context.isBundledDependency || isRemoteEntry) {
-    const technicalViolations = [
+    // 低リスク技術的違反: バンドルコードで頻出し、直接的な攻撃リスクが低いため完全抑制
+    const lowRiskViolations = [
       'no-obfuscation',
-      'no-dangerous-dom',
       'no-navigator-access',
       'no-prototype-pollution',
       'no-global-override',
-      'no-network-without-permission',
     ]
 
-    if (technicalViolations.includes(rule)) {
+    if (lowRiskViolations.includes(rule)) {
       return null
+    }
+
+    // 高リスク技術的違反: 攻撃に直結しうるため、バンドル依存でも抑制しない
+    const highRiskViolations = [
+      'no-network-without-permission',
+      'no-dangerous-dom',
+    ]
+
+    if (highRiskViolations.includes(rule)) {
+      return originalSeverity
     }
 
     const criticalViolations = [
@@ -117,14 +128,14 @@ export function describeFileContext(context: FileContext): string {
     return '共有ライブラリ（Module Federation自動生成、技術的違反を抑制）'
   }
   if (context.isBundledDependency) {
-    return 'バンドルされた依存ライブラリ（技術的違反を抑制）'
+    return 'バンドルされた依存ライブラリ（低リスク技術的違反を抑制、高リスク違反は検出）'
   }
   const fileName = context.filePath
   if (fileName === 'remoteEntry.js') {
-    return 'Module Federationエントリーポイント（Module Federation自動生成、技術的違反を抑制）'
+    return 'Module Federationエントリーポイント（Module Federation自動生成、低リスク技術的違反を抑制）'
   }
   if (fileName.includes('__federation_fn_import')) {
     return 'Module Federation動的インポート（厳格に検証）'
   }
-  return 'その他のファイル（標準的な検証）'
+  return '未知のファイル（既知ライブラリパターンに一致しないため、すべての違反を検出）'
 }

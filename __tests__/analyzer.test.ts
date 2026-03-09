@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
-import { adjustViolationSeverity } from '../src/utils/file-context.js'
+import { adjustViolationSeverity, determineFileContext } from '../src/utils/file-context.js'
+import { matchesKnownLibraryPattern } from '../src/utils/helpers.js'
 import type { FileContext } from '../src/types.js'
 
 describe('CodeSecurityService - analyzer', () => {
@@ -512,7 +513,7 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
     })
   })
 
-  describe('バンドル依存ファイルの技術的違反は完全抑制される', () => {
+  describe('バンドル依存ファイルの段階的抑制', () => {
     const bundledContext: FileContext = {
       filePath: 'vision_bundle-DJzU6HDp.js',
       isUserCode: false,
@@ -522,14 +523,20 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
 
     it.each([
       'no-obfuscation',
-      'no-dangerous-dom',
       'no-navigator-access',
       'no-prototype-pollution',
       'no-global-override',
-      'no-network-without-permission',
-    ])('%s は完全抑制される', (rule) => {
+    ])('低リスク違反 %s は完全抑制される', (rule) => {
       const result = adjustViolationSeverity(rule, 'critical', bundledContext)
       expect(result).toBeNull()
+    })
+
+    it.each([
+      'no-network-without-permission',
+      'no-dangerous-dom',
+    ])('高リスク違反 %s は抑制されない', (rule) => {
+      const result = adjustViolationSeverity(rule, 'critical', bundledContext)
+      expect(result).toBe('critical')
     })
 
     it.each([
@@ -551,6 +558,106 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
 
       const result = adjustViolationSeverity('no-obfuscation', 'critical', userContext)
       expect(result).toBe('critical')
+    })
+  })
+
+  describe('ホワイトリスト方式 - 既知ライブラリパターン', () => {
+    it.each([
+      'three-webgl.js',
+      'three.module.js',
+      'draco_decoder.js',
+      'basis_transcoder.js',
+      'rapier_wasm.js',
+      'cannon-es.js',
+      'ammo-worker.js',
+      'hls.min.js',
+      'mediapipe_tasks.js',
+      'vision_bundle-DJzU6HDp.js',
+      'tfjs_backend.js',
+      'cesium_workers.js',
+      'potpack_module.js',
+      '__vite-browser-external.js',
+    ])('既知ライブラリ %s は matchesKnownLibraryPattern に一致する', (fileName) => {
+      expect(matchesKnownLibraryPattern(fileName)).toBe(true)
+    })
+
+    it.each([
+      'evil.js',
+      'malware.js',
+      'keylogger.js',
+      'custom-script.js',
+      'app.js',
+    ])('未知ファイル %s は matchesKnownLibraryPattern に一致しない', (fileName) => {
+      expect(matchesKnownLibraryPattern(fileName)).toBe(false)
+    })
+  })
+
+  describe('determineFileContext - ホワイトリスト判定', () => {
+    it('既知ライブラリパターンに一致するファイルは isBundledDependency: true', () => {
+      const context = determineFileContext('three-webgl.js')
+      expect(context.isBundledDependency).toBe(true)
+    })
+
+    it('未知のファイル名は isBundledDependency: false', () => {
+      const context = determineFileContext('evil.js')
+      expect(context.isBundledDependency).toBe(false)
+      expect(context.isUserCode).toBe(false)
+      expect(context.isSharedLibrary).toBe(false)
+    })
+
+    it('remoteEntry.js は引き続き isBundledDependency: false', () => {
+      const context = determineFileContext('remoteEntry.js')
+      expect(context.isBundledDependency).toBe(false)
+    })
+
+    it('ユーザーコードは引き続き正しく判定される', () => {
+      const context = determineFileContext('__federation_expose_World-abc123.js')
+      expect(context.isUserCode).toBe(true)
+      expect(context.isBundledDependency).toBe(false)
+    })
+  })
+
+  describe('攻撃シナリオ防止 - 未知ファイルの違反が抑制されない', () => {
+    it('evil.js のような未知ファイルでは全違反が抑制されない', () => {
+      const context = determineFileContext('evil.js')
+
+      // isBundledDependency: false なので抑制ロジックに入らない
+      const rules = [
+        'no-obfuscation',
+        'no-dangerous-dom',
+        'no-navigator-access',
+        'no-prototype-pollution',
+        'no-global-override',
+        'no-network-without-permission',
+        'no-eval',
+        'no-storage-access',
+        'no-storage-event',
+      ]
+
+      for (const rule of rules) {
+        const result = adjustViolationSeverity(rule, 'critical', context)
+        expect(result).toBe('critical')
+      }
+    })
+
+    it('攻撃者がランダムなファイル名を使ってもセキュリティチェックを回避できない', () => {
+      const maliciousFileNames = [
+        'payload.js',
+        'backdoor.js',
+        'inject.js',
+        'c2-client.js',
+        'data-exfil.js',
+      ]
+
+      for (const fileName of maliciousFileNames) {
+        const context = determineFileContext(fileName)
+        expect(context.isBundledDependency).toBe(false)
+
+        // 高リスク違反が全て検出される
+        expect(adjustViolationSeverity('no-network-without-permission', 'critical', context)).toBe('critical')
+        expect(adjustViolationSeverity('no-dangerous-dom', 'critical', context)).toBe('critical')
+        expect(adjustViolationSeverity('no-eval', 'critical', context)).toBe('critical')
+      }
     })
   })
 })
