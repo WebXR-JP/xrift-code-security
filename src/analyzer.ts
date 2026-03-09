@@ -46,6 +46,18 @@ const KNOWN_SAFE_VARIABLES = [
 ]
 
 /**
+ * セキュリティ上重要な API（サプライチェーン攻撃で改ざんされると危険）
+ * これらの window.xxx = ... はバンドル依存でも絶対に抑制しない
+ */
+const SENSITIVE_APIS = [
+  'fetch', 'XMLHttpRequest', 'WebSocket',
+  'setTimeout', 'setInterval',
+  'eval', 'Function',
+  'console', 'alert', 'prompt', 'confirm',
+  'sendBeacon',
+]
+
+/**
  * Violationオブジェクトを作成するヘルパー関数
  */
 function createViolation(
@@ -265,18 +277,33 @@ export function analyzeCodeSecurity(
         left.object.type === 'Identifier' &&
         ['window', 'globalThis', 'document', 'navigator'].includes(left.object.name)
       ) {
+        const propertyName = left.property.type === 'Identifier'
+          ? left.property.name
+          : null
+
         signals.hasGlobalVariableOverride = true
 
         if (left.object.name === 'navigator') {
           signals.hasNavigatorAccess = true
         }
 
-        signals.detectedViolations.push(createViolation(
-          'no-global-override',
-          'critical',
-          `グローバルオブジェクト ${left.object.name} の改ざんは禁止されています`,
-          node
-        ))
+        if (propertyName && SENSITIVE_APIS.includes(propertyName)) {
+          // センシティブ API オーバーライド → バンドル依存でも絶対に抑制されない
+          signals.detectedViolations.push(createViolation(
+            'no-sensitive-api-override',
+            'critical',
+            `セキュリティ上重要な API ${left.object.name}.${propertyName} の改ざんは禁止されています`,
+            node
+          ))
+        } else {
+          // カスタムグローバル設定 → 既存ルール（バンドル依存で抑制可能）
+          signals.detectedViolations.push(createViolation(
+            'no-global-override',
+            'critical',
+            `グローバルオブジェクト ${left.object.name} の改ざんは禁止されています`,
+            node
+          ))
+        }
       }
 
       // Object.prototype.xxx = ... 検出（組み込みオブジェクトのみ）
@@ -484,11 +511,22 @@ export function analyzeCodeSecurity(
   // 権限チェック
   if (signals.hasNetworkAPI) {
     const allowedDomains = permissions?.network?.allowedDomains || []
-    const hasUnauthorizedDomain = signals.referencedDomains.some(
+    const unauthorizedDomains = signals.referencedDomains.filter(
       domain => !allowedDomains.includes(domain) && !ALLOWED_DOMAINS.includes(domain)
     )
 
-    if (hasUnauthorizedDomain || signals.hasDynamicURLConstruction) {
+    // リテラル URL で非許可ドメイン → バンドル依存でも絶対に抑制されない
+    if (unauthorizedDomains.length > 0) {
+      signals.hasNetworkWithoutPermission = true
+      signals.detectedViolations.push(createViolation(
+        'no-unauthorized-domain',
+        'critical',
+        `許可されていないドメインへのネットワーク通信: ${unauthorizedDomains.join(', ')}`
+      ))
+    }
+
+    // 動的 URL → 既存ルール（バンドル依存で抑制可能）
+    if (signals.hasDynamicURLConstruction) {
       signals.hasNetworkWithoutPermission = true
       signals.detectedViolations.push(createViolation(
         'no-network-without-permission',

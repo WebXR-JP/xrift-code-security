@@ -45,6 +45,15 @@ export function adjustViolationSeverity(
   originalSeverity: 'critical' | 'warning',
   context: FileContext
 ): 'critical' | 'warning' | null {
+  // センシティブ API オーバーライドと非許可ドメインは、どのファイルコンテキストでも絶対に抑制しない
+  const neverSuppressRules = [
+    'no-sensitive-api-override',
+    'no-unauthorized-domain',
+  ]
+  if (neverSuppressRules.includes(rule)) {
+    return originalSeverity
+  }
+
   // ユーザーコードは常に厳格
   if (context.isUserCode) {
     return originalSeverity
