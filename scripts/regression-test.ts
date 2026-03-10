@@ -54,6 +54,12 @@ for (const distPath of distDirs) {
     const code = readFileSync(filePath, 'utf-8')
     const fileName = filePath.replace(distPath + '/', '')
     const context = determineFileContext(fileName)
+
+    // 共有ライブラリはホスト提供のためスキャン不要
+    if (context.isSharedLibrary) {
+      continue
+    }
+
     const signals = analyzeCodeSecurity(code)
 
     // adjustViolationSeverity を通して、最終的に残る violation をチェック

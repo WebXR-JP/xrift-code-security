@@ -93,10 +93,11 @@ export const ALLOWED_PACKAGES = [
 ]
 
 /**
- * 許可されたドメイン（CDN）
+ * 許可されたドメイン（CDN・標準仕様）
  */
 export const ALLOWED_DOMAINS = [
   'cdn.jsdelivr.net',
   'unpkg.com',
   'esm.sh',
+  'immersiveweb.dev',   // W3C Immersive Web: WebXR 機能記述子 URL として使用
 ]

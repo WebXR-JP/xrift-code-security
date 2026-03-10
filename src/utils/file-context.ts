@@ -1,11 +1,41 @@
 import type { FileContext } from '../types.js'
 
 /**
+ * ホストが提供するプラットフォーム共有パッケージ
+ * これらの __federation_shared_* ファイルのみスキャン対象から除外される
+ */
+export const PLATFORM_SHARED_PACKAGES = [
+  'react',
+  'react-dom',
+  'three',
+  '@react-three/fiber',
+  '@react-three/drei',
+  '@react-three/rapier',
+  '@xrift/world-components',
+]
+
+/**
+ * ファイルパスがプラットフォーム共有パッケージに該当するか判定
+ */
+function isKnownSharedPackage(filePath: string): boolean {
+  const prefix = '__federation_shared_'
+  const idx = filePath.indexOf(prefix)
+  if (idx === -1) return false
+
+  const afterPrefix = filePath.substring(idx + prefix.length)
+  return PLATFORM_SHARED_PACKAGES.some(pkg =>
+    afterPrefix === pkg ||
+    afterPrefix.startsWith(pkg + '/') ||
+    afterPrefix.startsWith(pkg + '-')
+  )
+}
+
+/**
  * ファイルパスからコンテキストを判定
  *
  * 判定ロジック:
  * - __federation_expose_World: ユーザーコード (最も厳格)
- * - __federation_shared_: 共有ライブラリ (Module Federationが自動生成、緩和可能)
+ * - __federation_shared_ + 既知パッケージ: 共有ライブラリ (ホスト提供、スキャン除外)
  * - __federation_fn_import: Module Federationインフラ (厳格)
  * - remoteEntry.js: Module Federationエントリーポイント (Module Federationが自動生成、緩和可能)
  * - その他: バンドルされた依存ライブラリ (緩和可能)
@@ -16,10 +46,8 @@ export function determineFileContext(filePath: string): FileContext {
   // 1. ユーザーコード（__federation_expose_World-*.js）
   const isUserCode = fileName.includes('__federation_expose_World-') && fileName.endsWith('.js')
 
-  // 2. 共有ライブラリ（__federation_shared_*/*.js）
-  const isSharedLibrary =
-    fileName.startsWith('__federation_shared_') ||
-    filePath.includes('__federation_shared_')
+  // 2. 共有ライブラリ（既知のプラットフォーム共有パッケージのみ）
+  const isSharedLibrary = isKnownSharedPackage(filePath)
 
   // 3. バンドルされた依存ライブラリ（その他の*.js）
   const isBundledDependency =

@@ -23,6 +23,21 @@ export class CodeSecurityService {
     // ファイルコンテキストを判定（指定されていない場合は自動判定）
     const fileContext = request.fileContext || determineFileContext(request.code)
 
+    // 共有ライブラリはホストが提供するためスキャン不要
+    if (fileContext.isSharedLibrary) {
+      return {
+        valid: true,
+        securityScore: 0,
+        violations: { critical: [], warnings: [] },
+        analysis: {
+          entropy: 0,
+          suspiciousPatterns: [],
+          detectedAPIs: [],
+          externalDependencies: [],
+        },
+      }
+    }
+
     // セキュリティ解析実行
     const signals = analyzeCodeSecurity(
       request.code,
@@ -109,5 +124,5 @@ export class CodeSecurityService {
 
 export { analyzeCodeSecurity } from './analyzer.js'
 export { calculateSecurityScore, getSecurityVerdict } from './scoring.js'
-export { determineFileContext, adjustViolationSeverity } from './utils/file-context.js'
+export { determineFileContext, adjustViolationSeverity, PLATFORM_SHARED_PACKAGES } from './utils/file-context.js'
 export * from './types.js'
