@@ -49,6 +49,7 @@ export function adjustViolationSeverity(
   const neverSuppressRules = [
     'no-sensitive-api-override',
     'no-unauthorized-domain',
+    'no-rtc-connection',
   ]
   if (neverSuppressRules.includes(rule)) {
     return originalSeverity
@@ -91,6 +92,7 @@ export function adjustViolationSeverity(
     const technicalViolations = [
       'no-obfuscation',
       'no-dangerous-dom',
+      'no-javascript-blob',
       'no-navigator-access',
       'no-prototype-pollution',
       'no-global-override',
