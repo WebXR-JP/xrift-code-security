@@ -840,7 +840,7 @@ export function analyzeCodeSecurity(
           signals.detectedViolations.push(createViolation(
             'no-network-without-permission',
             'critical',
-            `new ${node.callee.name}() によるネットワーク通信にはxrift.config.tsでの権限宣言が必要です`,
+            `new ${node.callee.name}() によるネットワーク通信にはxrift.jsonでの権限宣言が必要です`,
             node
           ))
         }
@@ -871,7 +871,7 @@ export function analyzeCodeSecurity(
         signals.detectedViolations.push(createViolation(
           'no-network-without-permission',
           'critical',
-          'new BroadcastChannel() による通信チャネルの使用にはxrift.config.tsでの権限宣言が必要です',
+          'new BroadcastChannel() による通信チャネルの使用にはxrift.jsonでの権限宣言が必要です',
           node
         ))
       }
@@ -1114,7 +1114,7 @@ export function analyzeCodeSecurity(
       signals.detectedViolations.push(createViolation(
         'no-network-without-permission',
         'critical',
-        'ネットワーク通信にはxrift.config.tsでの権限宣言が必要です'
+        'ネットワーク通信にはxrift.jsonでの権限宣言が必要です'
       ))
     }
   }
