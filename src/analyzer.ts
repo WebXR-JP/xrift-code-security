@@ -46,6 +46,20 @@ const KNOWN_SAFE_VARIABLES = [
 ]
 
 /**
+ * navigator のうちセキュリティ上危険なプロパティ
+ * これらのみ no-navigator-access として検出する。
+ * navigator.xr 等の正当利用は許可する。
+ */
+const DANGEROUS_NAVIGATOR_PROPERTIES = [
+  'sendBeacon',       // データ外部送信
+  'geolocation',      // 位置情報取得
+  'credentials',      // 認証情報アクセス
+  'mediaDevices',     // カメラ・マイクアクセス
+  'clipboard',        // クリップボード操作
+  'serviceWorker',    // ServiceWorker登録
+]
+
+/**
  * セキュリティ上重要な API（サプライチェーン攻撃で改ざんされると危険）
  * これらの window.xxx = ... はバンドル依存でも絶対に抑制しない
  */
@@ -717,13 +731,13 @@ export function analyzeCodeSecurity(
         ))
       }
 
-      // navigator.* すべてを禁止
-      if (objectName === 'navigator') {
+      // navigator の危険プロパティのみ検出
+      if (objectName === 'navigator' && propertyName && DANGEROUS_NAVIGATOR_PROPERTIES.includes(propertyName)) {
         signals.hasNavigatorAccess = true
         signals.detectedViolations.push(createViolation(
           'no-navigator-access',
           'critical',
-          `navigator.${propertyName || '*'}へのアクセスは禁止されています（フィンガープリンティング防止）`,
+          `navigator.${propertyName}へのアクセスは禁止されています`,
           node
         ))
       }
@@ -772,22 +786,8 @@ export function analyzeCodeSecurity(
     },
 
     // 5. 変数名収集
-    Identifier(node: any, ancestors: acorn.Node[]) {
+    Identifier(node: any, _ancestors: acorn.Node[]) {
       variableNames.push(node.name)
-
-      // navigator 変数への直接参照も検出
-      if (node.name === 'navigator') {
-        const parent = ancestors[ancestors.length - 2]
-        if (parent?.type !== 'MemberExpression' || (parent as any).object !== node) {
-          signals.hasNavigatorAccess = true
-          signals.detectedViolations.push(createViolation(
-            'no-navigator-access',
-            'critical',
-            'navigatorオブジェクトへのアクセスは禁止されています',
-            node
-          ))
-        }
-      }
     },
 
     // 6. 文字列リテラル収集（StringLiteral → Literal + string ガード）
