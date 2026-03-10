@@ -888,8 +888,11 @@ export function analyzeCodeSecurity(
       }
 
       // B4: new Blob([...], { type: 'text/javascript' }) 検出
+      // Blob 内の文字列にセンシティブ API / 非許可ドメイン URL が含まれる場合のみ
+      // neverSuppress ルールで検出。それ以外は technicalViolations（バンドル依存で抑制可能）
       if (node.callee.type === 'Identifier' && node.callee.name === 'Blob') {
         const optionsArg = node.arguments[1]
+        let isJavaScriptBlob = false
         if (optionsArg?.type === 'ObjectExpression') {
           for (const prop of optionsArg.properties) {
             const key = prop.key?.type === 'Identifier' ? prop.key.name
@@ -900,14 +903,65 @@ export function analyzeCodeSecurity(
               typeof prop.value.value === 'string' &&
               prop.value.value.includes('javascript')
             ) {
-              signals.hasDangerousDOMManipulation = true
+              isJavaScriptBlob = true
+            }
+          }
+        }
+
+        if (isJavaScriptBlob) {
+          // Blob の第1引数（配列）から文字列を抽出して中身を検査
+          const contentArg = node.arguments[0]
+          const contentStrings: string[] = []
+          if (contentArg?.type === 'ArrayExpression') {
+            for (const el of contentArg.elements) {
+              if (el?.type === 'Literal' && typeof el.value === 'string') {
+                contentStrings.push(el.value)
+              }
+            }
+          }
+          const bodyText = contentStrings.join(' ')
+
+          const referencesSensitiveAPI = SENSITIVE_APIS.some(api => bodyText.includes(api))
+          const urlMatches = bodyText.match(/https?:\/\/[^\s'"`)]+/g) || []
+
+          if (referencesSensitiveAPI) {
+            const matched = SENSITIVE_APIS.filter(api => bodyText.includes(api))
+            signals.hasDangerousDOMManipulation = true
+            signals.detectedViolations.push(createViolation(
+              'no-sensitive-api-override',
+              'critical',
+              `JavaScript Blob 内でセンシティブ API (${matched.join(', ')}) が参照されています`,
+              node
+            ))
+          }
+
+          if (urlMatches.length > 0) {
+            const domains = extractDomains(urlMatches)
+            const allowedDomains = permissions?.network?.allowedDomains || []
+            const unauthorized = domains.filter(
+              d => !allowedDomains.includes(d) && !ALLOWED_DOMAINS.includes(d)
+            )
+            if (unauthorized.length > 0) {
+              signals.hasNetworkAPI = true
+              signals.hasNetworkWithoutPermission = true
               signals.detectedViolations.push(createViolation(
-                'no-javascript-blob',
+                'no-unauthorized-domain',
                 'critical',
-                'JavaScript Blob の作成は禁止されています（動的コード実行のリスク）',
+                `JavaScript Blob 内で許可されていないドメインが参照されています: ${unauthorized.join(', ')}`,
                 node
               ))
             }
+          }
+
+          // センシティブ API も URL も含まない場合は通常の no-javascript-blob（抑制可能）
+          if (!referencesSensitiveAPI && urlMatches.length === 0) {
+            signals.hasDangerousDOMManipulation = true
+            signals.detectedViolations.push(createViolation(
+              'no-javascript-blob',
+              'critical',
+              'JavaScript Blob の作成は禁止されています（動的コード実行のリスク）',
+              node
+            ))
           }
         }
       }
