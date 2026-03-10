@@ -126,10 +126,13 @@ export function analyzeCodeSecurity(
         ))
       }
 
-      // setTimeout/setInterval の文字列引数
+      // setTimeout/setInterval の文字列引数 (A11: TemplateLiteral も検出)
       if (['setTimeout', 'setInterval'].includes(calleeName || '')) {
         const firstArg = node.arguments[0]
-        if (firstArg?.type === 'Literal' && typeof firstArg.value === 'string') {
+        if (
+          (firstArg?.type === 'Literal' && typeof firstArg.value === 'string') ||
+          firstArg?.type === 'TemplateLiteral'
+        ) {
           signals.hasDynamicCodeExecution = true
           signals.detectedViolations.push(createViolation(
             'no-string-timeout',
@@ -158,13 +161,40 @@ export function analyzeCodeSecurity(
         }
       }
 
-      // WebSocket検出
-      if (calleeName === 'WebSocket') {
-        signals.hasNetworkAPI = true
-        const urlArg = node.arguments[0]
-        if (urlArg?.type === 'Literal' && typeof urlArg.value === 'string') {
-          urlStrings.push(urlArg.value)
+      // A1: 間接eval (0, eval)(...) 検出
+      if (
+        node.callee.type === 'SequenceExpression' &&
+        node.callee.expressions.length >= 2
+      ) {
+        const lastExpr = node.callee.expressions[node.callee.expressions.length - 1]
+        if (lastExpr.type === 'Identifier' && lastExpr.name === 'eval') {
+          signals.hasEval = true
+          signals.detectedViolations.push(createViolation(
+            'no-eval',
+            'critical',
+            '間接eval (0, eval)() の使用は禁止されています',
+            node
+          ))
         }
+      }
+
+      // A2: .constructor.constructor(...) チェーン検出
+      if (
+        node.callee.type === 'MemberExpression' &&
+        node.callee.property.type === 'Identifier' &&
+        node.callee.property.name === 'constructor' &&
+        node.callee.object.type === 'MemberExpression' &&
+        node.callee.object.property.type === 'Identifier' &&
+        node.callee.object.property.name === 'constructor'
+      ) {
+        signals.hasEval = true
+        signals.hasDynamicCodeExecution = true
+        signals.detectedViolations.push(createViolation(
+          'no-eval',
+          'critical',
+          '.constructor.constructor() による間接的なコード実行は禁止されています',
+          node
+        ))
       }
 
       // navigator.sendBeacon検出
@@ -189,8 +219,134 @@ export function analyzeCodeSecurity(
         }
       }
 
-      // 危険なDOM操作メソッド検出
-      if (['insertAdjacentHTML'].includes(calleeName || '')) {
+      // A3: fetch.call()/fetch.apply()/fetch.bind() 検出
+      if (
+        node.callee.type === 'MemberExpression' &&
+        node.callee.property.type === 'Identifier' &&
+        ['call', 'apply', 'bind'].includes(node.callee.property.name) &&
+        node.callee.object.type === 'Identifier' &&
+        SENSITIVE_APIS.includes(node.callee.object.name)
+      ) {
+        signals.detectedViolations.push(createViolation(
+          'no-sensitive-api-override',
+          'critical',
+          `${node.callee.object.name}.${node.callee.property.name}() によるセンシティブ API の間接呼び出しは禁止されています`,
+          node
+        ))
+      }
+
+      // A4: Reflect.apply(fetch, ...) 検出
+      if (
+        node.callee.type === 'MemberExpression' &&
+        node.callee.object.type === 'Identifier' &&
+        node.callee.object.name === 'Reflect' &&
+        node.callee.property.type === 'Identifier' &&
+        node.callee.property.name === 'apply'
+      ) {
+        const firstArg = node.arguments[0]
+        if (firstArg?.type === 'Identifier' && SENSITIVE_APIS.includes(firstArg.name)) {
+          signals.detectedViolations.push(createViolation(
+            'no-sensitive-api-override',
+            'critical',
+            `Reflect.apply(${firstArg.name}, ...) によるセンシティブ API の間接呼び出しは禁止されています`,
+            node
+          ))
+        }
+      }
+
+      // A5: Object.assign(window/globalThis, {fetch: ...}) 検出
+      if (
+        node.callee.type === 'MemberExpression' &&
+        node.callee.object.type === 'Identifier' &&
+        node.callee.object.name === 'Object' &&
+        node.callee.property.type === 'Identifier' &&
+        node.callee.property.name === 'assign'
+      ) {
+        const targetArg = node.arguments[0]
+        const sourceArg = node.arguments[1]
+        if (
+          targetArg?.type === 'Identifier' &&
+          ['window', 'globalThis', 'self'].includes(targetArg.name) &&
+          sourceArg?.type === 'ObjectExpression'
+        ) {
+          for (const prop of sourceArg.properties) {
+            const propName = prop.key?.type === 'Identifier' ? prop.key.name
+              : (prop.key?.type === 'Literal' && typeof prop.key.value === 'string') ? prop.key.value
+              : null
+            if (propName && SENSITIVE_APIS.includes(propName)) {
+              signals.hasGlobalVariableOverride = true
+              signals.detectedViolations.push(createViolation(
+                'no-sensitive-api-override',
+                'critical',
+                `Object.assign(${targetArg.name}, {${propName}: ...}) によるセンシティブ API の改ざんは禁止されています`,
+                node
+              ))
+            } else if (propName) {
+              signals.hasGlobalVariableOverride = true
+              signals.detectedViolations.push(createViolation(
+                'no-global-override',
+                'critical',
+                `Object.assign(${targetArg.name}, ...) によるグローバルオブジェクトの改ざんは禁止されています`,
+                node
+              ))
+            }
+          }
+        }
+      }
+
+      // A8: document.write / document.writeln 検出
+      if (
+        node.callee.type === 'MemberExpression' &&
+        node.callee.object.type === 'Identifier' &&
+        node.callee.object.name === 'document' &&
+        node.callee.property.type === 'Identifier' &&
+        ['write', 'writeln'].includes(node.callee.property.name)
+      ) {
+        signals.hasDangerousDOMManipulation = true
+        signals.detectedViolations.push(createViolation(
+          'no-dangerous-dom',
+          'critical',
+          `document.${node.callee.property.name}()の使用は禁止されています（XSS攻撃のリスク）`,
+          node
+        ))
+      }
+
+      // A10: window.open(url) / location.replace(url) 検出
+      if (node.callee.type === 'MemberExpression') {
+        const obj = node.callee.object
+        const prop = node.callee.property
+        if (
+          obj?.type === 'Identifier' &&
+          prop?.type === 'Identifier' &&
+          ((obj.name === 'window' && prop.name === 'open') ||
+           (obj.name === 'location' && prop.name === 'replace'))
+        ) {
+          const urlArg = node.arguments[0]
+          if (urlArg?.type === 'Literal' && typeof urlArg.value === 'string') {
+            const url = urlArg.value
+            if (url.startsWith('http://') || url.startsWith('https://')) {
+              const domains = extractDomains([url])
+              const allowedDomains = permissions?.network?.allowedDomains || []
+              const unauthorized = domains.filter(
+                d => !allowedDomains.includes(d) && !ALLOWED_DOMAINS.includes(d)
+              )
+              if (unauthorized.length > 0) {
+                signals.hasNetworkAPI = true
+                signals.hasNetworkWithoutPermission = true
+                signals.detectedViolations.push(createViolation(
+                  'no-unauthorized-domain',
+                  'critical',
+                  `${obj.name}.${prop.name}() による許可されていないドメインへのアクセス: ${unauthorized.join(', ')}`,
+                  node
+                ))
+              }
+            }
+          }
+        }
+      }
+
+      // 危険なDOM操作メソッド検出 (A9: createContextualFragment も追加)
+      if (['insertAdjacentHTML', 'createContextualFragment'].includes(calleeName || '')) {
         signals.hasDangerousDOMManipulation = true
         signals.detectedViolations.push(createViolation(
           'no-dangerous-dom',
@@ -266,7 +422,7 @@ export function analyzeCodeSecurity(
         }
       }
 
-      // Object.defineProperty(window, 'fetch', ...) / Reflect.set(window, 'fetch', ...) 検出
+      // Object.defineProperty / Reflect.set / Reflect.defineProperty 検出 (A6, A7)
       if (node.callee.type === 'MemberExpression') {
         const obj = node.callee.object
         const prop = node.callee.property
@@ -274,13 +430,15 @@ export function analyzeCodeSecurity(
           obj?.type === 'Identifier' &&
           prop?.type === 'Identifier' &&
           ((obj.name === 'Object' && prop.name === 'defineProperty') ||
-           (obj.name === 'Reflect' && prop.name === 'set'))
+           (obj.name === 'Reflect' && (prop.name === 'set' || prop.name === 'defineProperty')))
         ) {
           const targetArg = node.arguments[0]
           const nameArg = node.arguments[1]
+
+          // window/globalThis/self 対象
           if (
             targetArg?.type === 'Identifier' &&
-            ['window', 'globalThis'].includes(targetArg.name) &&
+            ['window', 'globalThis', 'self'].includes(targetArg.name) &&
             nameArg?.type === 'Literal' &&
             typeof nameArg.value === 'string'
           ) {
@@ -289,17 +447,34 @@ export function analyzeCodeSecurity(
               signals.detectedViolations.push(createViolation(
                 'no-sensitive-api-override',
                 'critical',
-                `Object.defineProperty/Reflect.set による ${targetArg.name}.${nameArg.value} の改ざんは禁止されています`,
+                `${obj.name}.${prop.name} による ${targetArg.name}.${nameArg.value} の改ざんは禁止されています`,
                 node
               ))
             } else {
               signals.detectedViolations.push(createViolation(
                 'no-global-override',
                 'critical',
-                `Object.defineProperty/Reflect.set による ${targetArg.name} の改ざんは禁止されています`,
+                `${obj.name}.${prop.name} による ${targetArg.name} の改ざんは禁止されています`,
                 node
               ))
             }
+          }
+
+          // A7: X.prototype 対象 (BUILTIN_PROTOTYPES)
+          if (
+            targetArg?.type === 'MemberExpression' &&
+            targetArg.property.type === 'Identifier' &&
+            targetArg.property.name === 'prototype' &&
+            targetArg.object.type === 'Identifier' &&
+            BUILTIN_PROTOTYPES.includes(targetArg.object.name)
+          ) {
+            signals.hasGlobalVariableOverride = true
+            signals.detectedViolations.push(createViolation(
+              'no-prototype-pollution',
+              'critical',
+              `${obj.name}.${prop.name} による ${targetArg.object.name}.prototype の汚染は禁止されています`,
+              node
+            ))
           }
         }
       }
@@ -313,7 +488,7 @@ export function analyzeCodeSecurity(
       if (
         left.type === 'MemberExpression' &&
         left.object.type === 'Identifier' &&
-        ['window', 'globalThis', 'document', 'navigator'].includes(left.object.name)
+        ['window', 'globalThis', 'self', 'document', 'navigator'].includes(left.object.name)
       ) {
         const propertyName = left.property.type === 'Identifier'
           ? left.property.name
@@ -364,6 +539,97 @@ export function analyzeCodeSecurity(
         ))
       }
 
+      // C2: window.__proto__.fetch = ... 検出
+      if (
+        left.type === 'MemberExpression' &&
+        left.object.type === 'MemberExpression' &&
+        left.object.property.type === 'Identifier' &&
+        left.object.property.name === '__proto__' &&
+        left.object.object.type === 'Identifier' &&
+        ['window', 'globalThis', 'self'].includes(left.object.object.name)
+      ) {
+        const propertyName = left.property.type === 'Identifier'
+          ? left.property.name
+          : (left.property.type === 'Literal' && typeof left.property.value === 'string')
+            ? left.property.value
+            : null
+        signals.hasGlobalVariableOverride = true
+        if (propertyName && SENSITIVE_APIS.includes(propertyName)) {
+          signals.detectedViolations.push(createViolation(
+            'no-sensitive-api-override',
+            'critical',
+            `${left.object.object.name}.__proto__.${propertyName} によるセンシティブ API の改ざんは禁止されています`,
+            node
+          ))
+        } else {
+          signals.detectedViolations.push(createViolation(
+            'no-global-override',
+            'critical',
+            `${left.object.object.name}.__proto__ によるグローバルオブジェクトの改ざんは禁止されています`,
+            node
+          ))
+        }
+      }
+
+      // C3: Object.getPrototypeOf(window).fetch = ... 検出
+      if (
+        left.type === 'MemberExpression' &&
+        left.object.type === 'CallExpression' &&
+        left.object.callee.type === 'MemberExpression' &&
+        left.object.callee.object.type === 'Identifier' &&
+        left.object.callee.object.name === 'Object' &&
+        left.object.callee.property.type === 'Identifier' &&
+        left.object.callee.property.name === 'getPrototypeOf'
+      ) {
+        const targetArg = left.object.arguments[0]
+        if (
+          targetArg?.type === 'Identifier' &&
+          ['window', 'globalThis', 'self'].includes(targetArg.name)
+        ) {
+          const propertyName = left.property.type === 'Identifier'
+            ? left.property.name
+            : (left.property.type === 'Literal' && typeof left.property.value === 'string')
+              ? left.property.value
+              : null
+          signals.hasGlobalVariableOverride = true
+          if (propertyName && SENSITIVE_APIS.includes(propertyName)) {
+            signals.detectedViolations.push(createViolation(
+              'no-sensitive-api-override',
+              'critical',
+              `Object.getPrototypeOf(${targetArg.name}).${propertyName} によるセンシティブ API の改ざんは禁止されています`,
+              node
+            ))
+          } else {
+            signals.detectedViolations.push(createViolation(
+              'no-global-override',
+              'critical',
+              `Object.getPrototypeOf(${targetArg.name}) によるグローバルオブジェクトの改ざんは禁止されています`,
+              node
+            ))
+          }
+        }
+      }
+
+      // C4: ({}).__proto__.xxx = ... 検出 (window/globalThis/self 以外)
+      if (
+        left.type === 'MemberExpression' &&
+        left.object.type === 'MemberExpression' &&
+        left.object.property.type === 'Identifier' &&
+        left.object.property.name === '__proto__' &&
+        !(
+          left.object.object.type === 'Identifier' &&
+          ['window', 'globalThis', 'self'].includes(left.object.object.name)
+        )
+      ) {
+        signals.hasGlobalVariableOverride = true
+        signals.detectedViolations.push(createViolation(
+          'no-prototype-pollution',
+          'critical',
+          '__proto__ を経由したプロトタイプ汚染は禁止されています',
+          node
+        ))
+      }
+
       // onstorage への代入検出
       if (
         left.type === 'MemberExpression' &&
@@ -379,11 +645,11 @@ export function analyzeCodeSecurity(
         ))
       }
 
-      // .src / .href への URL 代入検出（Image/CSS によるデータ送信）
+      // .src / .href / .action への URL 代入検出 (C5: action 追加)
       if (
         left.type === 'MemberExpression' &&
         left.property.type === 'Identifier' &&
-        ['src', 'href'].includes(left.property.name)
+        ['src', 'href', 'action'].includes(left.property.name)
       ) {
         const rightValue = node.right
         if (rightValue?.type === 'Literal' && typeof rightValue.value === 'string') {
@@ -543,8 +809,109 @@ export function analyzeCodeSecurity(
       }
     },
 
-    // 7. new Function() コンストラクタ検出
+    // 7. new Function() コンストラクタ検出 + B1-B4 ネットワーク/DOM コンストラクタ検出
     NewExpression(node: any, _ancestors: acorn.Node[]) {
+      // B1: ネットワーク系コンストラクタ
+      const networkConstructors = ['EventSource', 'WebSocket', 'Worker', 'SharedWorker']
+      if (
+        node.callee.type === 'Identifier' &&
+        networkConstructors.includes(node.callee.name)
+      ) {
+        signals.hasNetworkAPI = true
+        const urlArg = node.arguments[0]
+        if (urlArg?.type === 'Literal' && typeof urlArg.value === 'string') {
+          const url = urlArg.value
+          const domains = extractDomains([url])
+          const allowedDomains = permissions?.network?.allowedDomains || []
+          const unauthorized = domains.filter(
+            d => !allowedDomains.includes(d) && !ALLOWED_DOMAINS.includes(d)
+          )
+          if (unauthorized.length > 0) {
+            signals.hasNetworkWithoutPermission = true
+            signals.detectedViolations.push(createViolation(
+              'no-unauthorized-domain',
+              'critical',
+              `new ${node.callee.name}() による許可されていないドメインへの通信: ${unauthorized.join(', ')}`,
+              node
+            ))
+          }
+        } else {
+          signals.hasNetworkWithoutPermission = true
+          signals.detectedViolations.push(createViolation(
+            'no-network-without-permission',
+            'critical',
+            `new ${node.callee.name}() によるネットワーク通信にはxrift.config.tsでの権限宣言が必要です`,
+            node
+          ))
+        }
+      }
+
+      // B2: RTCPeerConnection（IP漏洩リスク → neverSuppress）
+      if (
+        node.callee.type === 'Identifier' &&
+        node.callee.name === 'RTCPeerConnection'
+      ) {
+        signals.hasNetworkAPI = true
+        signals.hasNetworkWithoutPermission = true
+        signals.detectedViolations.push(createViolation(
+          'no-rtc-connection',
+          'critical',
+          'new RTCPeerConnection() はIP漏洩のリスクがあるため禁止されています',
+          node
+        ))
+      }
+
+      // B2: BroadcastChannel（同一オリジン内データ転送）
+      if (
+        node.callee.type === 'Identifier' &&
+        node.callee.name === 'BroadcastChannel'
+      ) {
+        signals.hasNetworkAPI = true
+        signals.hasNetworkWithoutPermission = true
+        signals.detectedViolations.push(createViolation(
+          'no-network-without-permission',
+          'critical',
+          'new BroadcastChannel() による通信チャネルの使用にはxrift.config.tsでの権限宣言が必要です',
+          node
+        ))
+      }
+
+      // B3: new DOMParser()
+      if (node.callee.type === 'Identifier' && node.callee.name === 'DOMParser') {
+        signals.hasDangerousDOMManipulation = true
+        signals.detectedViolations.push(createViolation(
+          'no-dangerous-dom',
+          'critical',
+          'new DOMParser()の使用は禁止されています（XSS攻撃のリスク）',
+          node
+        ))
+      }
+
+      // B4: new Blob([...], { type: 'text/javascript' }) 検出
+      if (node.callee.type === 'Identifier' && node.callee.name === 'Blob') {
+        const optionsArg = node.arguments[1]
+        if (optionsArg?.type === 'ObjectExpression') {
+          for (const prop of optionsArg.properties) {
+            const key = prop.key?.type === 'Identifier' ? prop.key.name
+              : (prop.key?.type === 'Literal' ? prop.key.value : null)
+            if (
+              key === 'type' &&
+              prop.value?.type === 'Literal' &&
+              typeof prop.value.value === 'string' &&
+              prop.value.value.includes('javascript')
+            ) {
+              signals.hasDangerousDOMManipulation = true
+              signals.detectedViolations.push(createViolation(
+                'no-javascript-blob',
+                'critical',
+                'JavaScript Blob の作成は禁止されています（動的コード実行のリスク）',
+                node
+              ))
+            }
+          }
+        }
+      }
+
       if (node.callee.type === 'Identifier' && node.callee.name === 'Function') {
         signals.hasEval = true
         signals.hasDynamicCodeExecution = true
@@ -595,6 +962,19 @@ export function analyzeCodeSecurity(
             node
           ))
         }
+      }
+    },
+
+    // D1: eval`code` (TaggedTemplateExpression) 検出
+    TaggedTemplateExpression(node: any, _ancestors: acorn.Node[]) {
+      if (node.tag.type === 'Identifier' && node.tag.name === 'eval') {
+        signals.hasEval = true
+        signals.detectedViolations.push(createViolation(
+          'no-eval',
+          'critical',
+          'eval タグ付きテンプレートリテラルの使用は禁止されています',
+          node
+        ))
       }
     },
 
