@@ -43,6 +43,15 @@ export interface CodePermissions {
 }
 
 /**
+ * ワールド開発者が xrift.json の world.permissions に宣言する権限
+ * 訪問者が入室前に確認・同意するモデル
+ */
+export interface WorldPermissions {
+  allowedDomains?: string[]
+  allowedCodeRules?: string[]
+}
+
+/**
  * ファイルコンテキスト（検証ルールの調整に使用）
  */
 export interface FileContext {
@@ -65,6 +74,7 @@ export interface ValidateCodeRequest {
     permissions?: CodePermissions
   }
   fileContext?: FileContext
+  worldPermissions?: WorldPermissions
 }
 
 /**
@@ -83,4 +93,5 @@ export interface ValidateCodeResponse {
     detectedAPIs: string[]
     externalDependencies: string[]
   }
+  permissionWarnings?: string[]
 }
