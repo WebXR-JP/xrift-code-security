@@ -1136,6 +1136,39 @@ describe('WorldPermissions モデル対応', () => {
     })
   })
 
+  describe('no-rtc-connection は allowedCodeRules で許可できる', () => {
+    const code = `const pc = new RTCPeerConnection()`
+
+    it('指定しなければ violations に残る', () => {
+      const result = service.validate({ code })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection').length).toBeGreaterThan(0)
+      expect(result.valid).toBe(false)
+    })
+
+    it('allowedCodeRules に指定すると violations から除外され、警告も出ない', () => {
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-rtc-connection'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection')).toHaveLength(0)
+      expect(result.valid).toBe(true)
+      expect(result.permissionWarnings).toBeUndefined()
+    })
+
+    it('バンドル依存の中でも宣言なしでは抑制されない', () => {
+      const result = service.validate({
+        code,
+        fileContext: { isUserCode: false, isBundledDependency: true, isSharedLibrary: false, filePath: 'vendor.js' },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection').length).toBeGreaterThan(0)
+    })
+  })
+
   describe('NEVER_ALLOWABLE_RULES は allowedCodeRules で指定しても除外されない', () => {
     it('no-eval を allowedCodeRules に指定しても violations に残る', () => {
       const code = `eval("alert('xss')")`
@@ -1317,12 +1350,12 @@ describe('WorldPermissions モデル対応', () => {
       }
     })
 
-    it('NEVER_ALLOWABLE_RULES は 9 ルール', () => {
-      expect(NEVER_ALLOWABLE_RULES).toHaveLength(9)
+    it('NEVER_ALLOWABLE_RULES は 8 ルール', () => {
+      expect(NEVER_ALLOWABLE_RULES).toHaveLength(8)
     })
 
-    it('ALLOWABLE_RULES は 8 ルール', () => {
-      expect(ALLOWABLE_RULES).toHaveLength(8)
+    it('ALLOWABLE_RULES は 9 ルール', () => {
+      expect(ALLOWABLE_RULES).toHaveLength(9)
     })
   })
 })

@@ -846,7 +846,7 @@ export function analyzeCodeSecurity(
         }
       }
 
-      // B2: RTCPeerConnection（IP漏洩リスク → neverSuppress）
+      // B2: RTCPeerConnection（IP漏洩リスク → neverSuppress。allowedCodeRules で宣言すれば許可）
       if (
         node.callee.type === 'Identifier' &&
         node.callee.name === 'RTCPeerConnection'
@@ -856,7 +856,7 @@ export function analyzeCodeSecurity(
         signals.detectedViolations.push(createViolation(
           'no-rtc-connection',
           'critical',
-          'new RTCPeerConnection() はIP漏洩のリスクがあるため禁止されています',
+          'new RTCPeerConnection() はIP漏洩のリスクがあるため、xrift.json の allowedCodeRules での宣言が必要です',
           node
         ))
       }

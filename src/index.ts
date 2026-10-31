@@ -20,7 +20,6 @@ const ENTROPY_THRESHOLD = 7.0
 export const NEVER_ALLOWABLE_RULES = [
   'no-eval',
   'no-sensitive-api-override',
-  'no-rtc-connection',
   'no-prototype-pollution',
   'no-storage-access',
   'no-cookie-access',
@@ -41,6 +40,7 @@ export const ALLOWABLE_RULES = [
   'no-global-override',
   'no-navigator-access',
   'no-network-without-permission',
+  'no-rtc-connection',
   'no-string-timeout',
 ] as const
 
