@@ -8,7 +8,9 @@ import {
   calculateEntropy,
   calculateAverageEntropy,
   extractDomains,
+  extractIceServerHost,
   getCalleeName,
+  isIceServerUrl,
   getLocation,
   ALLOWED_DOMAINS
 } from './utils/helpers.js'
@@ -72,6 +74,35 @@ const SENSITIVE_APIS = [
 ]
 
 /**
+ * WebRTC のピア接続を作るグローバル（ベンダープレフィックス付きを含む）
+ * new するときだけでなく、参照した時点で検出する（window.xxx・別名への代入・typeof での判定を含む）
+ */
+const RTC_CONSTRUCTORS = ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection']
+
+/**
+ * ICE サーバーの設定が静的な文字列だけで書かれているか
+ * （iceServers: [{ urls: 'turn:...' }] や urls: ['stun:...', 'turn:...']）
+ */
+function isStaticString(node: any): boolean {
+  if (node?.type === 'Literal') return typeof node.value === 'string'
+  return node?.type === 'TemplateLiteral' && node.expressions.length === 0
+}
+
+function isStaticIceServers(node: any): boolean {
+  if (node?.type !== 'ArrayExpression') return false
+  return node.elements.every((server: any) => {
+    if (server?.type !== 'ObjectExpression') return false
+    return server.properties.every((prop: any) => {
+      if (prop.type !== 'Property' || prop.computed) return false
+      const key = prop.key.type === 'Identifier' ? prop.key.name : prop.key.value
+      if (key !== 'urls' && key !== 'url') return true
+      if (prop.value.type === 'ArrayExpression') return prop.value.elements.every(isStaticString)
+      return isStaticString(prop.value)
+    })
+  })
+}
+
+/**
  * Violationオブジェクトを作成するヘルパー関数
  */
 function createViolation(
@@ -107,6 +138,7 @@ export function analyzeCodeSecurity(
     hasDynamicCodeExecution: false,
     hasNetworkAPI: false,
     hasNetworkWithoutPermission: false,
+    hasRTCConnection: false,
     hasDynamicURLConstruction: false,
     hasObfuscatedCode: false,
     hasGlobalVariableOverride: false,
@@ -121,6 +153,20 @@ export function analyzeCodeSecurity(
   }
 
   const urlStrings: string[] = []
+  // ICE サーバー（STUN/TURN）の URL と、静的に読めない ICE 設定。RTC を使うファイルでだけ検査する
+  const iceServerUrls: { url: string; node: acorn.Node }[] = []
+  const dynamicIceConfigNodes: acorn.Node[] = []
+
+  // B2: RTCPeerConnection（IP漏洩リスク → neverSuppress。allowedCodeRules で宣言すれば許可）
+  const reportRTCConnection = (name: string, node: acorn.Node) => {
+    signals.hasRTCConnection = true
+    signals.detectedViolations.push(createViolation(
+      'no-rtc-connection',
+      'critical',
+      `${name} はIP漏洩のリスクがあるため、xrift.json の permissions.allowedCodeRules での宣言が必要です`,
+      node
+    ))
+  }
   const stringLiterals: string[] = []
   const variableNames: string[] = []
 
@@ -698,6 +744,14 @@ export function analyzeCodeSecurity(
         ? node.property.name
         : null
 
+      // window.RTCPeerConnection / globalThis['RTCPeerConnection'] 検出
+      const accessedName = node.computed
+        ? (node.property.type === 'Literal' && typeof node.property.value === 'string' ? node.property.value : null)
+        : propertyName
+      if (accessedName && RTC_CONSTRUCTORS.includes(accessedName)) {
+        reportRTCConnection(accessedName, node)
+      }
+
       // localStorage/sessionStorage検出
       if (['localStorage', 'sessionStorage'].includes(objectName || '')) {
         signals.hasStorageAccess = true
@@ -788,6 +842,11 @@ export function analyzeCodeSecurity(
     // 5. 変数名収集
     Identifier(node: any, _ancestors: acorn.Node[]) {
       variableNames.push(node.name)
+
+      // RTCPeerConnection の参照検出（宣言・プロパティ名は Identifier として訪問されない）
+      if (RTC_CONSTRUCTORS.includes(node.name)) {
+        reportRTCConnection(node.name, node)
+      }
     },
 
     // 6. 文字列リテラル収集（StringLiteral → Literal + string ガード）
@@ -795,6 +854,10 @@ export function analyzeCodeSecurity(
       if (typeof node.value !== 'string') return
 
       stringLiterals.push(node.value)
+
+      if (isIceServerUrl(node.value)) {
+        iceServerUrls.push({ url: node.value, node })
+      }
 
       // 16進数エスケープ・Unicodeエスケープの検出
       const value = node.value
@@ -846,19 +909,15 @@ export function analyzeCodeSecurity(
         }
       }
 
-      // B2: RTCPeerConnection（IP漏洩リスク → neverSuppress）
+      // B2: RTCPeerConnection の設定が変数や通信結果だと ICE サーバーの接続先を確かめられない
+      // （検出そのものは Identifier / MemberExpression で行う）
+      const rtcName = getCalleeName(node.callee)
+      const config = node.arguments[0]
       if (
-        node.callee.type === 'Identifier' &&
-        node.callee.name === 'RTCPeerConnection'
+        rtcName && RTC_CONSTRUCTORS.includes(rtcName) &&
+        config && config.type !== 'ObjectExpression'
       ) {
-        signals.hasNetworkAPI = true
-        signals.hasNetworkWithoutPermission = true
-        signals.detectedViolations.push(createViolation(
-          'no-rtc-connection',
-          'critical',
-          'new RTCPeerConnection() はIP漏洩のリスクがあるため禁止されています',
-          node
-        ))
+        dynamicIceConfigNodes.push(node)
       }
 
       // B2: BroadcastChannel（同一オリジン内データ転送）
@@ -1019,6 +1078,24 @@ export function analyzeCodeSecurity(
       }
     },
 
+    // ICE サーバーの URL をテンプレートリテラルからも収集（式を含むものは iceServers 側で動的として扱う）
+    TemplateLiteral(node: any, _ancestors: acorn.Node[]) {
+      if (node.expressions.length > 0) return
+      const value = node.quasis[0]?.value.cooked
+      if (typeof value === 'string' && isIceServerUrl(value)) {
+        iceServerUrls.push({ url: value, node })
+      }
+    },
+
+    // iceServers: [...] が静的な文字列だけで書かれているか
+    Property(node: any, _ancestors: acorn.Node[]) {
+      if (node.computed) return
+      const key = node.key.type === 'Identifier' ? node.key.name : node.key.value
+      if (key === 'iceServers' && !isStaticIceServers(node.value)) {
+        dynamicIceConfigNodes.push(node)
+      }
+    },
+
     // D1: eval`code` (TaggedTemplateExpression) 検出
     TaggedTemplateExpression(node: any, _ancestors: acorn.Node[]) {
       if (node.tag.type === 'Identifier' && node.tag.name === 'eval') {
@@ -1086,6 +1163,32 @@ export function analyzeCodeSecurity(
       'critical',
       `疑わしい変数名が検出されました: ${suspiciousVars.slice(0, 3).join(', ')}...`
     ))
+  }
+
+  // ICE サーバー（STUN/TURN）の接続先検査
+  // WebRTC は fetch 等と違い CSP の connect-src でも止まらないため、ここで allowedDomains と照合する
+  if (signals.hasRTCConnection) {
+    const allowedDomains = permissions?.network?.allowedDomains || []
+    for (const { url, node } of iceServerUrls) {
+      const host = extractIceServerHost(url)
+      if (host && (allowedDomains.includes(host) || ALLOWED_DOMAINS.includes(host))) continue
+      signals.hasNetworkWithoutPermission = true
+      signals.detectedViolations.push(createViolation(
+        'no-unauthorized-domain',
+        'critical',
+        `ICE サーバー（STUN/TURN）の許可されていない接続先: ${host ?? url}`,
+        node
+      ))
+    }
+    for (const node of dynamicIceConfigNodes) {
+      signals.hasNetworkWithoutPermission = true
+      signals.detectedViolations.push(createViolation(
+        'no-network-without-permission',
+        'critical',
+        'ICE サーバー（STUN/TURN）の設定が動的なため接続先を確認できません。xrift.jsonでの権限宣言が必要です',
+        node
+      ))
+    }
   }
 
   // URL解析

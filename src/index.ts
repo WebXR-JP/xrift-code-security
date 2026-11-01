@@ -20,7 +20,6 @@ const ENTROPY_THRESHOLD = 7.0
 export const NEVER_ALLOWABLE_RULES = [
   'no-eval',
   'no-sensitive-api-override',
-  'no-rtc-connection',
   'no-prototype-pollution',
   'no-storage-access',
   'no-cookie-access',
@@ -41,6 +40,7 @@ export const ALLOWABLE_RULES = [
   'no-global-override',
   'no-navigator-access',
   'no-network-without-permission',
+  'no-rtc-connection',
   'no-string-timeout',
 ] as const
 
@@ -104,13 +104,16 @@ export class CodeSecurityService {
       .filter((v): v is NonNullable<typeof v> => v !== null)
 
     // allowedCodeRules によるフィルタリング（NEVER_ALLOWABLE_RULES は除外不可）
-    const { filteredViolations, permissionWarnings } = this.applyWorldPermissions(
+    const { filteredViolations, permissionWarnings, effectiveAllowedRules } = this.applyWorldPermissions(
       adjustedViolations,
       request.worldPermissions
     )
 
-    // セキュリティスコア計算
-    const securityScore = calculateSecurityScore(signals)
+    // セキュリティスコア計算（許可された RTC はスコアに数えない）
+    const scoredSignals = effectiveAllowedRules.includes('no-rtc-connection')
+      ? { ...signals, hasRTCConnection: false }
+      : signals
+    const securityScore = calculateSecurityScore(scoredSignals)
 
     // 違反を分類（調整後の重大度で）
     const critical: Violation[] = []
@@ -129,6 +132,7 @@ export class CodeSecurityService {
     if (signals.hasEval) detectedAPIs.push('eval')
     if (signals.hasDynamicCodeExecution) detectedAPIs.push('setTimeout/setInterval(string)')
     if (signals.hasNetworkAPI) detectedAPIs.push('fetch/WebSocket/XMLHttpRequest')
+    if (signals.hasRTCConnection) detectedAPIs.push('RTCPeerConnection')
     if (signals.hasStorageAccess) detectedAPIs.push('localStorage/sessionStorage/indexedDB/cookie')
     if (signals.hasNavigatorAccess) detectedAPIs.push('navigator')
     if (signals.hasDangerousDOMManipulation) detectedAPIs.push('innerHTML/outerHTML/createElement')
@@ -196,12 +200,12 @@ export class CodeSecurityService {
   private applyWorldPermissions(
     violations: Violation[],
     worldPermissions?: WorldPermissions
-  ): { filteredViolations: Violation[]; permissionWarnings: string[] } {
+  ): { filteredViolations: Violation[]; permissionWarnings: string[]; effectiveAllowedRules: string[] } {
     const permissionWarnings: string[] = []
     const allowedCodeRules = worldPermissions?.allowedCodeRules || []
 
     if (allowedCodeRules.length === 0) {
-      return { filteredViolations: violations, permissionWarnings }
+      return { filteredViolations: violations, permissionWarnings, effectiveAllowedRules: [] }
     }
 
     // 無効なルール指定を警告
@@ -227,7 +231,7 @@ export class CodeSecurityService {
       v => !effectiveAllowedRules.includes(v.rule)
     )
 
-    return { filteredViolations, permissionWarnings }
+    return { filteredViolations, permissionWarnings, effectiveAllowedRules }
   }
 }
 

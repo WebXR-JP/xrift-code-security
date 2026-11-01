@@ -20,6 +20,7 @@ export interface SecuritySignals {
   hasDynamicCodeExecution: boolean
   hasNetworkAPI: boolean
   hasNetworkWithoutPermission: boolean
+  hasRTCConnection: boolean
   hasDynamicURLConstruction: boolean
   hasObfuscatedCode: boolean
   hasGlobalVariableOverride: boolean
