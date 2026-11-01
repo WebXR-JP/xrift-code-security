@@ -16,6 +16,7 @@ export function calculateSecurityScore(signals: SecuritySignals): number {
   if (signals.hasEval) return 100
   if (signals.hasDynamicCodeExecution) return 100
   if (signals.hasNetworkWithoutPermission) return 100
+  if (signals.hasRTCConnection) return 100
   if (signals.hasGlobalVariableOverride) return 100
   if (signals.hasStorageAccess) return 100
   if (signals.hasNavigatorAccess) return 100

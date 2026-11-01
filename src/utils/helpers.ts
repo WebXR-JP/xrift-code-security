@@ -36,6 +36,30 @@ export function calculateAverageEntropy(strings: string[]): number {
 }
 
 /**
+ * ICE サーバー（STUN/TURN）の URL かどうか
+ */
+export function isIceServerUrl(url: string): boolean {
+  return /^(stuns?|turns?):/i.test(url)
+}
+
+/**
+ * ICE サーバーの URL（stun:host:port, turns:host?transport=tcp など）からホスト名を抽出
+ * 特殊スキームではないため new URL() ではホスト名が取れない
+ */
+export function extractIceServerHost(url: string): string | null {
+  const rest = url
+    .replace(/^(stuns?|turns?):/i, '')
+    .replace(/^\/\//, '')
+    .split('?')[0]
+  if (rest.startsWith('[')) {
+    const end = rest.indexOf(']')
+    return end > 1 ? rest.slice(0, end + 1).toLowerCase() : null
+  }
+  const host = rest.split(':')[0]
+  return host ? host.toLowerCase() : null
+}
+
+/**
  * URL文字列からドメイン名を抽出
  */
 export function extractDomains(urls: string[]): string[] {
